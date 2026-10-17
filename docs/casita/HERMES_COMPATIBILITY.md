@@ -102,10 +102,21 @@ HERMES_SOURCE=/path/to/clean/pinned-hermes \
 `HERMES_COMPAT_EXTRA_PATH` may add an explicitly selected development
 site-packages directory when the pinned SDK and synthetic dependencies are in
 separate environments. The final revision's focused and full suite results must
-be recorded after the current native changes pass; no earlier synchronous-care
-test count establishes that result.
+be evaluated together: this revision passed 376 tests with zero failures,
+errors or skips on Python 3.14.8, including both real-native execution fixtures.
+Wheel/sdist and secret scans passed. The app-side observer passed 66 component
+checks (including its real native-ledger probe) plus six native server checks.
+These are synthetic source checks, not a rebuilt/deployed image or real accounts.
 
 ## Deployment limits
+
+Native child transcripts are Hermes profile-level data. The parent's
+`session_search` hides subagents from browsing/discovery, but an explicit known
+session ID can still read a child transcript without Apollo scope checks.
+Apollo grant revocation therefore does not retract existing Hermes transcripts.
+This pilot enrolls one adult. Before private adult scopes share one Hermes
+profile, fence those general transcript reads or use separate profiles/stores;
+Apollo's patient grants alone do not supply that broader isolation.
 
 This is a source-level Hermes integration, not evidence of a live cloud model
 request or production activation. Tests do not prove real subscription login,

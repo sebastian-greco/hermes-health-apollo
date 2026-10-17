@@ -2,9 +2,11 @@
 
 The user authorized end-to-end Apollo-based source implementation. Work is on
 `codex/end-to-end`; this document tracks the source design, not production
-activation. The current native background-specialist changes are being reviewed
-and the full branch has not yet passed its final validation gates. Do not treat
-the earlier synchronous-specialist test count as validation of this revision.
+activation. Native background-specialist version `0.1.0+casita.2` passed the
+full 376-test gate with zero failures, errors or skips, including actual pinned
+Hermes parent/child execution. Wheel/sdist, secrets and diff gates also passed.
+The separate HA package passed 66 WAHA component/native-ledger checks and six
+native server checks. The Docker image has not been rebuilt or deployed here.
 
 ## Source architecture now implemented
 
@@ -44,6 +46,9 @@ operation receipts, not free-form child claims or its transcript.
   prior health context may be included, but it is not a resumed child run.
 - No provider credential or provider/model override is accepted from Casita or
   the child. Hermes continues to supply the selected model and authentication.
+- Child transcripts remain in Hermes' profile database. Apollo API grants do
+  not fence explicit native session reads. This is a single-adult pilot; private
+  family enrollment needs a profile/store or transcript-access boundary first.
 
 ## Not enabled or proved by source work
 

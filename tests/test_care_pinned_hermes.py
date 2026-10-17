@@ -51,8 +51,6 @@ class PinnedHermesCare(unittest.TestCase):
 
 SCRIPT = r'''
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 import json
 import os
 from pathlib import Path
@@ -62,47 +60,12 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-# No provider or account credentials are inherited by this process.
-assert "OPENAI_API_KEY" not in os.environ
-assert "ANTHROPIC_API_KEY" not in os.environ
-assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
-
+assert not any(k in os.environ for k in ('OPENAI_API_KEY','ANTHROPIC_API_KEY','GOOGLE_APPLICATION_CREDENTIALS'))
 def deny_network(*args, **kwargs):
-    raise AssertionError("Network is forbidden in synthetic SDK compatibility test")
+    raise AssertionError('Network forbidden in synthetic SDK test')
 
-def plan(*commands, done=True):
-    return {"commands": [{"op": op, "args": args} for op, args in commands],
-            "question": None, "done": done}
-
-responses = [
-    plan(("create_case", {"kind": "issue", "title": "Questione sintetica"}),
-         ("create_case", {"kind": "episode", "title": "Episodio sintetico", "parent_id": "$0"}),
-         ("append_entry", {"category_id": "journal", "narrative": "Osservazione riferita sintetica.",
-             "occurrence_start": "2030-01-02T10:00:00Z", "uncertainty": "exact", "links": ["$1"]}),
-         ("log_food", {"day": "2030-01-02", "description": "Pasto riferito sintetico.", "case_id": "$1"}),
-         done=False),
-    plan(("get_entry", {"entry_id": "$2"}),
-         ("revise_entry", {"entry_id": "$2", "expected_revision": 1,
-             "changes": {"narrative": "Osservazione corretta sintetica."}, "reason": "Chiarimento sintetico"}),
-         ("report", {"episode_id": "$1", "end": "2030-01-03"})),
-]
-calls, facades = [], []
-revoke_after_inference = False
-
-def deterministic_provider(**kwargs):
-    calls.append(kwargs)
-    assert responses, "Unexpected inference call (denial/replay should not infer)"
-    response = responses.pop(0)
-    if revoke_after_inference:
-        configuration["plugins"]["entries"]["health-data"]["settings"]["care"]["bindings"][0]["permissions"] = ["read"]
-        config.get_config_path().write_text(json.dumps(configuration))
-    return ("synthetic-provider", "synthetic-model", SimpleNamespace(choices=[SimpleNamespace(
-        message=SimpleNamespace(content=json.dumps(response)))]))
-
-with patch.object(socket.socket, "connect", deny_network), \
-     patch.object(socket.socket, "connect_ex", deny_network), \
-     patch.object(socket, "create_connection", deny_network):
-    from agent.plugin_llm import PluginLlm
+with patch.object(socket.socket,'connect',deny_network), patch.object(socket.socket,'connect_ex',deny_network), patch.object(socket,'create_connection',deny_network):
+    from agent.subagent_lifecycle import bind_subagent_parent
     from agent.delegation_context import delegated_child_context
     from gateway import session_context as sc
     from hermes_cli import config
@@ -110,175 +73,90 @@ with patch.object(socket.socket, "connect", deny_network), \
     from hermes_cli.plugins import PluginManager
     from tools.registry import registry
 
-    original_load = PluginManager._load_plugin
-    original_llm_init = PluginLlm.__init__
-    configuration = {"plugins": {"entries": {"health-data": {"settings": {"care": {
-        "enabled": True, "bindings": [{"platform": "waha", "actor_id": "synthetic-adult",
-        "conversation_id": "synthetic-private", "scope_id": "synthetic-scope",
-        "permissions": ["read", "write", "admin"]}]}}}}}}
-
+    configuration={'plugins': {'entries': {'health-data': {'settings': {'care': {
+        'enabled': True, 'bindings': [{'platform':'waha','actor_id':'actor-a','conversation_id':'private-a',
+        'scope_id':'scope-a','permissions':['read','write','admin']}]}}}}}}
+    original_load=PluginManager._load_plugin
     def configured_load(manager, manifest):
-        # Doctor creates its own throwaway home before loading. Write a real
-        # config there BEFORE original native registration, without mocking ctx.
-        config_path = config.get_config_path()
-        assert Path(os.environ["HERMES_HOME"]) in config_path.parents
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(configuration))  # JSON is valid YAML.
-        return original_load(manager, manifest)
+        path=config.get_config_path()
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(configuration))
+        return original_load(manager,manifest)
 
-    def deterministic_llm_init(self, *args, **kwargs):
-        kwargs["sync_caller"] = deterministic_provider
-        original_llm_init(self, *args, **kwargs)
-        facades.append(self)
-
-    with patch.object(PluginManager, "_load_plugin", configured_load), \
-         patch.object(PluginLlm, "__init__", deterministic_llm_init), \
-         _doctor_runtime(Path(sys.argv[1])) as runtime:
-        assert runtime.manifest.name == "health-data"
-        assert set(runtime.registered_tools) == {"consult_health"}, runtime.registered_tools
-        assert set(runtime.registered_hooks) == {"post_gateway_admission"}, runtime.registered_hooks
-        entry = registry.get_entry("consult_health")
-        assert entry.toolset == "casita_health"
-        assert set(entry.schema["parameters"]["properties"]) == {"request"}
-        assert len(facades) == 1, "ctx.llm must provide the real host-owned facade"
-        assert not {"health_query", "health_log_food", "health_event_query", "append_entry", "activate_plan"} & set(registry.get_all_tool_names())
-
+    with patch.object(PluginManager,'_load_plugin',configured_load), _doctor_runtime(Path(sys.argv[1])) as loaded:
+        module=loaded.manager._plugins['health-data'].module
+        runtime=module.care_plugin.active_runtime
+        dispatcher=module.care_plugin.active_dispatcher
+        assert registry.get_entry('consult_health').toolset=='casita_health'
+        assert registry.get_entry('health_append_entry').toolset=='casita_health_specialist'
+        assert registry.get_entry('health_finish').toolset=='casita_health_specialist'
+        assert 'health_query' not in loaded.registered_tools
+        parent=SimpleNamespace(session_id='actual-parent-session')
+        class Runner:
+            def __init__(self): self.calls=[]
+            def dispatch(self,parent_agent,**kwargs):
+                self.calls.append(kwargs)
+                self.child=SimpleNamespace(session_id='native-child-session',_subagent_id='sa-health-child',is_interrupted=lambda:False)
+                dispatcher._started(kwargs['run_id'],self.child)
+                return {'status':'dispatched','delegation_id':'native-delegation'}
+            def cancel(self,*args,**kwargs): pass
+        runner=Runner()
+        dispatcher._runner=runner
         def dispatch(args=None):
-            raw = registry.dispatch("consult_health", {"request": "Registra e riepiloga"} if args is None else args)
-            return json.loads(raw) if isinstance(raw, str) else raw
-
-        def refused(result):
-            assert result.get("outcome") == "refused", result
-            assert result.get("code") == "care_request_refused", result
-
+            return json.loads(registry.dispatch('consult_health',args or {'request':'Registra'}))
         def bind(**overrides):
-            values = dict(platform="waha", user_id="synthetic-adult", chat_id="synthetic-private",
-                          message_id="synthetic-message", session_key="synthetic-native-session")
+            values=dict(platform='waha',user_id='actor-a',chat_id='private-a',message_id='source-a',session_key='native-session-a')
             values.update(overrides)
             return sc.set_session_vars(**values)
-
-        # An environment-only identity is insufficient, even if the process has
-        # a plausible route. ContextVars must be bound by the actual host turn.
-        with patch.dict(os.environ, {"HERMES_SESSION_PLATFORM": "waha",
-            "HERMES_SESSION_USER_ID": "synthetic-adult", "HERMES_SESSION_CHAT_ID": "synthetic-private",
-            "HERMES_SESSION_MESSAGE_ID": "synthetic-message", "HERMES_SESSION_KEY": "synthetic-native-session"}):
+        def refused(value): assert value.get('outcome')=='refused',value
+        with bind_subagent_parent(parent):
             refused(dispatch())
-        tokens = bind()
-        try:
-            refused(dispatch())  # Native identity still has no admission receipt.
-        finally:
-            sc.clear_session_vars(tokens)
-        assert calls == []
-
-        source = {"user_id": "synthetic-adult", "chat_id": "synthetic-private"}
-        message = "Registra questa osservazione sintetica, collega un episodio, correggila e riepiloga."
-        # Actual async native hook dispatch; no direct runtime.admit test bypass.
-        hook_results = asyncio.run(runtime.manager.ainvoke_hook("post_gateway_admission",
-            session_key="synthetic-native-session", platform="waha", source=source,
-            message_id="synthetic-message", text=message))
-        assert hook_results == [], hook_results
-        home = Path(os.environ["HERMES_HOME"])
-        databases = list(home.rglob("apollo.sqlite3"))
-        assert len(databases) == 1, databases
-        database = databases[0]
-        module = runtime.manager._plugins["health-data"].module
-        native_runtime = module.care_plugin.active_runtime
-        admitted = native_runtime.admitted(platform="waha", actor_id="synthetic-adult",
-            conversation_id="synthetic-private", message_id="synthetic-message",
-            session_key="synthetic-native-session")
-        assert admitted.text == message
-        with sqlite3.connect(database) as connection:
-            # Admission alone must not retain general Casita messages in health
-            # storage; only the later selected consult persists this receipt.
-            assert connection.execute("SELECT COUNT(*) FROM care_ingress").fetchone()[0] == 0
-
-        for overrides in ({"user_id": "synthetic-attacker"}, {"chat_id": "other-private"},
-                          {"message_id": "unadmitted-message"}, {"session_key": "unadmitted-session"}):
-            tokens = bind(**overrides)
-            try:
+            with patch.dict(os.environ,{'HERMES_SESSION_PLATFORM':'waha','HERMES_SESSION_USER_ID':'actor-a','HERMES_SESSION_CHAT_ID':'private-a','HERMES_SESSION_MESSAGE_ID':'source-a','HERMES_SESSION_KEY':'native-session-a'}):
                 refused(dispatch())
-            finally:
-                sc.clear_session_vars(tokens)
-        tokens = bind()
+            tokens=bind()
+            try: refused(dispatch())
+            finally: sc.clear_session_vars(tokens)
+        asyncio.run(loaded.manager.ainvoke_hook('post_gateway_admission',session_key='native-session-a',platform='waha',
+            source={'user_id':'actor-a','chat_id':'private-a'},message_id='source-a',text='Nota salute sintetica'))
+        database=next(Path(os.environ['HERMES_HOME']).rglob('apollo.sqlite3'))
+        with sqlite3.connect(database) as conn:
+            assert conn.execute('SELECT COUNT(*) FROM care_ingress').fetchone()[0]==0
+        tokens=bind()
         try:
-            refused(dispatch({"request": "Leggi", "scope_id": "another-patient"}))
-            with delegated_child_context():
-                refused(dispatch())
-            with patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1"}):
-                refused(dispatch())
-            # A plain worker lacks ContextVars; the supported host propagation
-            # explicitly copies context into the synchronous tool worker.
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                refused(pool.submit(dispatch).result())
-                completed = pool.submit(copy_context().run, dispatch).result()
-            assert completed["outcome"] == "succeeded", completed
-            assert completed["replayed"] is False
-            replayed = dispatch()
-            assert replayed["replayed"] is True, replayed
-            assert len(calls) == 2 and responses == []
-        finally:
-            sc.clear_session_vars(tokens)
-        refused(dispatch())  # Cleared worker context cannot reuse an old receipt.
-
-        # The real config reader must refresh grants after inference, not only
-        # a test binding callback. The provider removes write permission before
-        # returning a valid plan; no patient modification may follow.
-        asyncio.run(runtime.manager.ainvoke_hook("post_gateway_admission",
-            session_key="synthetic-native-session", platform="waha", source=source,
-            message_id="synthetic-revoked", text="Nota sintetica dopo revoca"))
-        responses.append(plan(("append_entry", {"category_id": "journal", "narrative": "Questa nota non deve essere salvata."})))
-        revoke_after_inference = True
-        tokens = bind(message_id="synthetic-revoked")
+            with bind_subagent_parent(parent):
+                refused(dispatch({'request':'Leggi','scope_id':'other-patient'}))
+                with delegated_child_context(): refused(dispatch())
+                ack=dispatch()
+                assert ack['outcome']=='delegated',ack
+                assert dispatch()['outcome']=='existing'
+            assert len(runner.calls)==1
+            # Actual plugin registration reads host active-agent context; no
+            # parent_agent kwarg is passed by registry/model_tools.
+            with bind_subagent_parent(SimpleNamespace(session_id='spoof',_subagent_id='spoof')):
+                result=json.loads(registry.dispatch('health_append_entry',{'action_id':'note-a','args':{'category_id':'journal','narrative':'No'}}))
+                assert result['status']=='refused'
+            with bind_subagent_parent(runner.child):
+                saved=json.loads(registry.dispatch('health_append_entry',{'action_id':'note-a','args':{'category_id':'journal','narrative':'Nota sintetica salvata'}}))
+                assert saved['entry_id'],saved
+                finished=json.loads(registry.dispatch('health_finish',{}))
+                assert finished['status']=='finished',finished
+            completion=dispatcher._finished(ack['job_id'],{'status':'completed','summary':'UNVERIFIED MODEL CLAIM'})
+            assert 'UNVERIFIED' not in completion['summary'] and 'Nota sintetica' not in completion['summary']
+        finally: sc.clear_session_vars(tokens)
+        # Native internal completion has no human message/admission receipt.
+        tokens=bind(message_id='')
         try:
-            revoked = dispatch()
-            assert revoked["outcome"] == "needs_clarification", revoked
-            assert revoked["results"][0]["status"] == "refused", revoked
-            assert len(calls) == 3 and responses == []
-        finally:
-            sc.clear_session_vars(tokens)
-
-        # Evidence is the actual Apollo schema and canonical projection, not a
-        # mock datastore or replacement implementation from the archived repo.
-        with sqlite3.connect(database) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM care_ingress").fetchone()[0] == 2
-            assert connection.execute("SELECT COUNT(*) FROM care_entries").fetchone()[0] == 1
-            assert connection.execute("SELECT COUNT(*) FROM care_entry_revisions").fetchone()[0] == 2
-            saved = json.loads(connection.execute("SELECT payload_json FROM care_entries").fetchone()[0])
-            assert saved["narrative"] == "Osservazione corretta sintetica."
-            assert saved["actor_id"] == "synthetic-adult"
-            assert saved["revision"] == 2
-            assert connection.execute("SELECT COUNT(*) FROM food_logs").fetchone()[0] == 1
-            assert connection.execute("SELECT items_json FROM food_logs").fetchone()[0] is None
-            assert connection.execute("SELECT COUNT(*) FROM care_food_links").fetchone()[0] == 1
-            assert connection.execute("SELECT COUNT(*) FROM events WHERE provider='care_journal'").fetchone()[0] == 1
-            assert connection.execute("SELECT COUNT(*) FROM raw_records WHERE provider='care_journal'").fetchone()[0] == 2
-            final_state = json.loads(connection.execute("SELECT state_json FROM care_dispatch").fetchone()[0])
-            report = final_state["outputs"][-1]
-            assert report["entry_count"] == 1
-            assert report["clinical_inference"] is False
-            assert len(report["food_entries"]) == 1
-            assert report["entries"][0]["revision"] == 2
-
-        # The real facade gates routing and builds provider-neutral structured
-        # output. Only its transport caller is synthetic; no raw auth is used.
-        for call in calls:
-            assert call["provider_override"] is None and call["model_override"] is None
-            assert call["profile_override"] is None and call["task"] is None
-            assert call["max_tokens"] == 4000
-            schema = call["extra_body"]["response_format"]["json_schema"]["schema"]
-            assert set(schema["properties"]) == {"commands", "question", "done"}
-            catalog = json.dumps(schema)
-            assert "terminal" not in catalog and "ha_call_service" not in catalog
-            assert '"activate_plan"' not in catalog and '"confirm_original"' not in catalog
-        first_input = json.loads(calls[0]["messages"][-1]["content"][-1]["text"])
-        assert first_input["original_message"] == message
-        assert "append_entry" in first_input["available_actions"]
-        assert "terminal" not in first_input["available_actions"]
-        assert len(json.dumps(first_input).encode()) <= 32000
-
-        print(json.dumps({"hermes_sha": sys.argv[2], "network": "blocked", "inference": "deterministic",
-            "tools": list(runtime.registered_tools), "native_admission": "passed",
-            "native_registry_dispatch": "passed", "ctx_llm_facade": "passed",
-            "thread_context": "passed", "delegated_denial": "passed", "fresh_grants": "passed",
-            "apollo_write_correction_food_report": "passed", "replay": "passed"}))
+            with bind_subagent_parent(parent):
+                status=dispatch({'request':'Risultato','action':'status','job_id':ack['job_id']})
+                assert status['state']=='completed',status
+                assert status['receipts'][0]['result']['entry_id']==saved['entry_id']
+                configuration['plugins']['entries']['health-data']['settings']['care']['bindings']=[]
+                config.get_config_path().write_text(json.dumps(configuration))
+                refused(dispatch({'request':'Risultato','action':'status','job_id':ack['job_id']}))
+        finally: sc.clear_session_vars(tokens)
+        with sqlite3.connect(database) as conn:
+            assert conn.execute('SELECT COUNT(*) FROM care_entries').fetchone()[0]==1
+            assert conn.execute('SELECT COUNT(*) FROM care_jobs').fetchone()[0]==1
+        print(json.dumps({'native_admission':'passed','native_registry_host_identity':'passed',
+            'parent_internal_status_fresh_grants':'passed','apollo_journal':'passed'}))
 '''

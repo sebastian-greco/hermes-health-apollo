@@ -72,7 +72,10 @@ care:
 ```
 
 Start with a single private scope for Sebastian. Give Lucila a distinct private
-scope and binding later. A shared Elio-care group must be an intentionally
+scope and binding later, after choosing separate Hermes profiles/stores or
+fencing general explicit child-transcript reads as described in
+`HERMES_COMPATIBILITY.md`. Apollo grants do not restrict Hermes' own transcript
+reader. A shared Elio-care group must be an intentionally
 configured shared scope with both authorized caregivers; do not point private
 adult bindings at that shared scope. The host checks WhatsApp sender and
 conversation identity against these configured bindings before admitting work
