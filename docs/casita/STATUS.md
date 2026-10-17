@@ -78,10 +78,11 @@ The actual pinned Hermes SDK is `d923a5eb487a17c0a68801bba9ef0f56c81040a8`
 (0.22.2); native registry/admission/ContextVar/LLM-facade checks use deterministic
 inference with networking blocked. Live cloud-model accuracy, actual Google
 consent/folder access, WhatsApp media/group transport and production activation
-are not proved by these checks. The full suite passed 354 tests with zero skips,
-failures or errors; a subsequently added clean installed-wheel care-mode check
-also passed. Source/wheel/sdist secret and artifact checks passed. Final run
-totals and commit are recorded in the review.
+are not proved by these checks. The full suite passed 355 tests with zero skips,
+failures or errors, including the clean installed-wheel care-mode check. A final
+local-time context fix passed 23 focused runtime/plugin/native-SDK checks.
+Source/wheel/sdist secret and artifact checks passed. Final commit and evidence
+are recorded in the review.
 
 Source rollback is a reviewed prior Git revision. Runtime data needs its own
 private backup; do not downgrade migrated databases blindly. Restore the matching

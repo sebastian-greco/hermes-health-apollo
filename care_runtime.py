@@ -20,6 +20,7 @@ import re
 import tempfile
 import threading
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from .care_store import Authority, AuthorizationError, CareError, CareStore, CareSession, ConflictError
 from . import care_specialist, food
@@ -116,7 +117,7 @@ class CareRuntime:
     def __init__(self, root: Path, *, bindings: Callable[[], list[Binding]], llm,
                  documents: Callable | None = None, attachment_loader: Callable | None = None,
                  clock: Callable[[], datetime] | None = None, reminders_enabled=False,
-                 on_change: Callable | None = None):
+                 on_change: Callable | None = None, timezone_name="UTC"):
         self.root = Path(root).absolute()
         if self.root.is_symlink():
             raise ValueError("Runtime root cannot be a symlink")
@@ -127,6 +128,7 @@ class CareRuntime:
         self.documents = documents
         self.attachment_loader = attachment_loader
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.timezone_name = ZoneInfo(timezone_name).key
         self.reminders_enabled = reminders_enabled
         self.delivery_available = lambda origin: self.reminders_enabled
         self.on_change = on_change or (lambda: None)
@@ -286,6 +288,8 @@ class CareRuntime:
                         break
                     context = self._context(session, origin)
                     context.update(original_message=origin.text, received_at=origin.received_at,
+                        timezone=self.timezone_name,
+                        received_local=datetime.fromisoformat(origin.received_at.replace("Z", "+00:00")).astimezone(ZoneInfo(self.timezone_name)).isoformat(),
                         routing_hint=request, attachments=list(origin.attachment_refs),
                         results=state["outputs"], available_actions=list(care_specialist.ACTION_SCHEMAS))
                     if len(_dump(context).encode()) > 32000:

@@ -269,3 +269,12 @@ def test_large_artifact_can_be_exported_in_bounded_authorized_chunks(modules, tm
     chunks = list(runtime.report_artifact_chunks(origin, artifact["artifact_ref"], chunk_bytes=250_000))
     assert max(map(len, chunks)) <= 250_000
     assert json.loads(b"".join(chunks)) == value
+
+
+def test_specialist_uses_trusted_local_time_with_explicit_offset(modules, tmp_path):
+    model = Model(plan(question="Dettaglio da chiarire"))
+    runtime, _ = setup(modules, tmp_path, model, timezone_name="Europe/Rome")
+    runtime.consult(message(modules, runtime))
+    sent = json.loads(model.calls[0]["input"][0]["text"])
+    assert sent["timezone"] == "Europe/Rome"
+    assert sent["received_local"] == "2030-01-02T11:00:00+01:00"

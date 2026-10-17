@@ -25,7 +25,7 @@ account/configuration path. The verification run here used the existing
 throwaway `.venv-compat` interpreter and development packages, with Python 3.14.
 This proves the pinned SDK interfaces and source workflow in that environment;
 it does **not** claim a package installation test on every supported Python.
-The derivative declares Python 3.11–3.14 after the complete 354-test suite passed
+The derivative declares Python 3.11–3.14 after the complete 355-test suite passed
 on Python 3.14.8, including native compatibility and document processing. Older
 declared interpreters were not separately exercised in this run. Target-image
 installation and real deployment remain separate checks.

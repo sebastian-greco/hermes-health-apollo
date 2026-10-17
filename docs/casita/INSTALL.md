@@ -52,6 +52,7 @@ are deliberately synthetic and will not route to any real conversation:
 ```yaml
 care:
   enabled: true
+  timezone: Europe/Rome
   bindings:
     - platform: waha
       actor_id: actor-example

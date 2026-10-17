@@ -72,7 +72,7 @@ def register(ctx):
         return DocumentWorkflow(session, runtime_root=runtime.root / "documents", drive=drive)
 
     runtime = CareRuntime(ctx.state.data_dir / "care", bindings=bindings, llm=ctx.llm,
-                          documents=document_factory)
+                          documents=document_factory, timezone_name=settings().get("timezone", "Europe/Rome"))
     active_runtime = runtime
     workers = []
     wakes = []
