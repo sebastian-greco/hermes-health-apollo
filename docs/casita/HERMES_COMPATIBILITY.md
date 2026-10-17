@@ -1,104 +1,116 @@
-# Pinned Hermes compatibility evidence
+# Hermes native health child compatibility
 
-The care integration was exercised against the real Hermes **0.22.2 source
-baseline** at `d923a5eb487a17c0a68801bba9ef0f56c81040a8`. The opt-in
-`tests/test_care_pinned_hermes.py` checks the checkout revision and requires its
-tracked files to be clean. It uses the actual plugin discovery, registration,
-configuration reader, admission hook delivery, tool registry, ContextVars and
-host LLM facade. It does not import the archived standalone care implementation.
+The native health specialist targets Hermes **0.22.2**, source revision
+`d923a5eb487a17c0a68801bba9ef0f56c81040a8`. The implementation is a
+version-pinned compatibility shim around Hermes internals; it does not use
+`PluginContext.llm` structured completion and does not implement a second model
+loop.
 
-## Reproduction
+## Integration design
 
-Use an isolated development environment containing the pinned Hermes SDK and
-this plugin's declared dependencies. With `HERMES_SOURCE` unset, ordinary test
-runs skip this external compatibility test.
+Hermes registers one parent tool, `consult_health` in `casita_health`. When a
+trusted, admitted WAHA message is selected, the plugin persists the Apollo job
+receipt and constructs a real Hermes `AIAgent` child. The child is launched via
+Hermes' own single-child execution path and durable asynchronous delegation
+queue. Hermes continues to own the agent loop, native session/transcript,
+provider credential leasing, progress lifecycle, cancellation and parent
+completion delivery.
+
+The shim subclasses Hermes' `AIAgent` only to control prompt assembly and the
+health-specific authorization/context-budget stop behavior. It uses Hermes'
+native child runtime resolution with no model/provider/base URL/API key/ACP
+override. The child inherits the active parent's configured model and native
+credentials. It is a native Hermes agent, not a prompt-only skill or custom
+planner.
+
+The child gets the dedicated `casita_health_specialist` toolset containing only
+bounded `health_*` Apollo actions and `health_finish`. The parent catalog is not
+mutated to make those tools available: the shim selects the child-only raw
+Hermes schemas for this child and restores the global tool-resolution state.
+The child disables delegation and general memory, skips soul/workspace/context
+files and parent prefill, and assembles its own health persona with bounded
+Apollo context. It does not inherit Casita's full chat transcript, house
+controls, shell, browser, general MCP/account tools or message-sending tools.
+
+The child has its own Hermes session and transcript in the Hermes session
+database. Its clinical context is not automatically inserted into Casita's
+general memory manager. Apollo's scoped SQLite remains the durable health record
+and job/action-receipt store. On completion the native queue receives only a
+small job reference; the parent must retrieve current status under a fresh
+trusted route before it can report verified receipts or a question.
+
+## Authorization and failure boundaries
+
+- Before launch, the host binds the durable Apollo job to the exact native child
+  object, Hermes session ID and native subagent/task identity. Model arguments
+  cannot supply or forge those values.
+- Before each inference request and tool action, the host checks that the child
+  object remains current and that the exact source actor/route grant still
+  authorizes the scope. Revocation signals native interruption; a withdrawn
+  grant does not wait through Hermes' provider retry ladder.
+- A child can run at most 12 model iterations by default. Its selected health
+  context is bounded before launch. If Hermes reaches a context-compression
+  boundary, the shim stops the run instead of sending private context through
+  an unguarded auxiliary compression provider. Already committed Apollo records
+  remain; the job is left uncertain as appropriate and is never silently
+  retried or relaunched after restart.
+- The native async ledger and progress callbacks carry neutral job metadata,
+  never the admitted message, clinical results, child prose or transcript. The
+  child transcript itself remains in Hermes' child session storage.
+- Cancellation first changes Apollo job state/revokes actions, then asks Hermes
+  to interrupt the child. A late child result after cancellation or grant
+  revocation is suppressed. Restart recovery marks abandoned running work
+  `unknown`; it does not infer that an external effect did or did not happen.
+
+The source continues to use provider/model selection from the Hermes profile.
+This does not mean the plugin can use every subscription's authorization method:
+the child uses the provider credentials Hermes has already resolved for the
+parent session.
+
+## Compatibility evidence and tests
+
+The focused compatibility tests use the actual pinned Hermes source with
+network access denied and synthetic model responses. They are intended to
+exercise these distinct layers:
+
+- `tests/test_care_pinned_hermes.py` uses Hermes Plugin Doctor, actual plugin
+  discovery/registration, native hook admission, registry dispatch and
+  host-bound ContextVars. A fake runner isolates the admission and Apollo
+  authorization protocol without pretending to test background execution.
+- `tests/test_care_native.py` constructs a real pinned Hermes parent and child
+  `AIAgent`, drives Hermes' native model/tool loop with a deterministic
+  non-streaming transport, and exercises its async completion queue, child
+  identity, cancellation, credential inheritance and context isolation.
+- The production-plugin fixture in that file loads the staged plugin with
+  Hermes Plugin Doctor, runs the actual parent `consult_health` and registered
+  child `health_*` handlers, verifies Apollo writes/projections and retrieves
+  status. Network sockets are denied; responses and patient details are
+  synthetic.
+- `tests/test_care_plugin.py` checks the separate reminder-worker setup and
+  fixed central HA egress mapping with synthetic host adapters. A separate
+  private Home Assistant app/observer patch owns the WAHA communication ledger;
+  it is not agent logic and is not made live by these Hermes tests.
+
+To run the SDK-bound tests, provide a clean checkout of the exact Hermes pin.
+With `HERMES_SOURCE` unset they are skipped:
 
 ```sh
 HERMES_SOURCE=/path/to/clean/pinned-hermes \
-  python -m pytest -o addopts='' tests/test_care_pinned_hermes.py -q -s
+  python -m pytest -o addopts='' tests/test_care_pinned_hermes.py tests/test_care_native.py -q -s
 ```
 
-`HERMES_COMPAT_EXTRA_PATH` optionally names an explicitly chosen development
-site-packages directory when the pinned SDK environment and synthetic test
-dependencies are separate. It is passed as a Python import path, never an
-account/configuration path. The verification run here used the existing
-throwaway `.venv-compat` interpreter and development packages, with Python 3.14.
-This proves the pinned SDK interfaces and source workflow in that environment;
-it does **not** claim a package installation test on every supported Python.
-The derivative declares Python 3.11–3.14 after the complete 355-test suite passed
-on Python 3.14.8, including native compatibility and document processing. Older
-declared interpreters were not separately exercised in this run. Target-image
-installation and real deployment remain separate checks.
+`HERMES_COMPAT_EXTRA_PATH` may add an explicitly selected development
+site-packages directory when the pinned SDK and synthetic dependencies are in
+separate environments. The final revision's focused and full suite results must
+be recorded after the current native changes pass; no earlier synchronous-care
+test count establishes that result.
 
-The test stages only root Python modules, `plugin.yaml`, package assets and
-skills into a temporary directory. Hermes Plugin Doctor makes a second temporary
-profile and loads that staged directory using its native loader. A small loader
-bootstrap writes actual synthetic `config.yaml` before original registration;
-`PluginContext.get_config` and host config refresh are never mocked. The child
-process has an explicit environment allowlist, temporary HOME/XDG/Hermes homes,
-no inherited provider credentials and no project/bundled plugins. Socket connect,
-connect_ex and create_connection are denied. All records, actors, routes, meals
-and descriptions are synthetic, and temporary files are removed afterward.
+## Deployment limits
 
-## Verified boundaries
-
-- With `plugins.entries.health-data.settings.care.enabled=true`, native
-  registration exposes only `consult_health` in toolset `casita_health` and
-  registers `post_gateway_admission`. Its sole model argument is `request`.
-  Apollo's legacy general tools and the specialist's internal actions are not
-  registered in the parent's catalog in care mode.
-- Actual `PluginManager.ainvoke_hook("post_gateway_admission", ...)` creates a
-  trusted admission receipt in bounded process memory. Only messages selected
-  for care or explicit confirmations are subsequently persisted; unrelated
-  general Casita conversation is not copied into health storage. Supplying native session identity without that
-  receipt fails. Environment-only identity also fails.
-- Actual registry dispatch reads host-bound session ContextVars. Unknown actor,
-  chat, message or native session keys and model-supplied scope overrides fail
-  before inference. Cleared contexts cannot reuse a prior receipt.
-- Both in-process `delegated_child_context()` and a subprocess delegation marker
-  fail closed, even with otherwise valid copied native session identity. The
-  test exposed the initial process-marker gap; the bridge now uses the pinned
-  SDK's `is_delegated_child_process_context()` predicate.
-- A plain worker thread lacks a bound native turn and fails. Explicit
-  `copy_context().run(...)` propagation succeeds through synchronous native tool
-  dispatch. Thus the host's actual worker context behavior matters; process-wide
-  environment values are not a substitute for native ContextVars.
-- Actual `ctx.llm` is a real `PluginLlm`. Only its low-level inference caller is
-  injected with deterministic responses. Provider/model/profile overrides and
-  auxiliary task overrides remain unset, and the real facade builds/validates
-  the provider-neutral structured action schema. The specialist schema contains
-  no terminal, HA device action, activation or confirmation command.
-- The native turn creates an issue and episode, saves a generic log in Apollo,
-  reuses Apollo's food path for a narrative meal without fabricated calories,
-  retrieves and corrects the log, and returns a factual episode report. SQLite
-  assertions verify current heads, immutable revisions, source/raw lineage,
-  canonical events and connected food links. Replay performs no new inference
-  or duplicate writes.
-- During a later real facade call, the synthetic provider changes the actual
-  temporary config to remove write permission. The refreshed host binding
-  rejects the proposed write after inference, leaving the patient history
-  unchanged. This checks actual config cache refresh as well as runtime guards.
-
-## Supported integration shape and limits
-
-The general Casita agent receives one dispatcher. Trusted native admission and
-route bindings select a per-scope Apollo database. A bounded specialist prompt
-and finite action schema run through the host-managed `ctx.llm` facade; trusted
-Python handlers execute authorized operations. This is an explicit specialist
-runner, not a `delegate_task` child inheriting all parent tools. Ordinary Hermes
-child lifecycle APIs cannot grant a private health catalog the parent never
-loads; prompt text alone does not establish an isolation boundary.
-
-The directory plugin and packaged entrypoint share the same source modules.
-This SDK test stages the installable directory form; wheel contents/entrypoint
-registration are covered by the separate package tests. Existing Apollo mode
-remains available when care mode is disabled, and no live profile is changed by
-these tests.
-
-This evidence does not exercise network inference, Google consent/Drive filing,
-actual reminder delivery, native media bytes, a live gateway conversation or
-production activation. Those require explicit configured adapters/account
-consent and reviewed deployment. The current text-only WAHA path cannot supply
-attachments; document intake remains unavailable until a trusted media host
-provides admitted bounded bytes. No claim of successful real account upload or
-notification delivery follows from a deterministic no-network test.
+This is a source-level Hermes integration, not evidence of a live cloud model
+request or production activation. Tests do not prove real subscription login,
+Google consent/Drive access, real WAHA delivery, medical correctness, or
+WhatsApp image/document/group transport. The current WAHA ingress remains
+text-only. Those require their separate configured services, consent and
+reviewed end-to-end verification. No real health records, reminders or
+messages are created by the synthetic tests.
