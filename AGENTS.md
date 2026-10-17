@@ -4,7 +4,23 @@ This private derivative starts from Infinite-Labs-AI/hermes-health-apollo at
 `9f2db670a2669c9f3401fecb3b547ed52bcb2c3b`. Read `README.CASITA.md`,
 `docs/casita/PLAN.md` and upstream `CONTRIBUTING.md` before implementation.
 
-## Required foundation
+## Confirmation and current authorization
+
+Treat brainstorming, questions, preferences and conditional suggestions as
+discussion. Get explicit confirmation before repository/fork creation/deletion,
+visibility changes, changing the agreed foundation, discarding/reorganizing
+work or launching an independent implementation session. Verify a conditional
+premise before acting. Do not infer blanket approval from a past preference.
+
+On 2026-10-17 the user explicitly authorized end-to-end implementation of this
+Apollo-based plan, including sub-agent delegation, phased work, review, tests,
+fixes and continued iteration through completion. This authorization permits
+task branches and reviewed commits/pushes to this private origin. It does not
+authorize publishing a public fork merely because the user thought private
+plugins might be unsupported: private/local Hermes installs are supported.
+Keep real account consent, new structural decisions and live activation separate.
+
+## Apollo foundation
 
 Extend Apollo's existing code, SQLite store/migrations, source provenance,
 semantic events/observations, queries and food logging. Do not create a second
@@ -45,6 +61,8 @@ tests following upstream contribution guidance. For documentation-only changes,
 changes before handoff. Push task branches only to the private origin; no merge,
 tag, history rewrite or live activation without a separate request.
 
-The current preparation task is repository preservation and a revised plan.
-`docs/casita/NEXT_SESSION_PROMPT.md` is a prepared handoff, not an instruction
-to launch another implementation run merely by reading this file.
+The current task is the explicitly authorized end-to-end implementation and
+review. Continue through generic logs, connected history/reports, specialist
+integration, document/Drive intake, verified reminders, shared caregivers and
+installation/compatibility evidence. Report genuine external consent or live
+activation blockers accurately; do not stop merely after phase one.
