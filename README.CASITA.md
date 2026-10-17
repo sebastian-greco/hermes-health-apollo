@@ -7,6 +7,12 @@ The complete ancestry of that baseline and its MIT license are retained.
 `upstream` tracks the original project; `origin` is the private household copy.
 Read the original [README](README.md) for Apollo's existing functionality.
 
+The original scheduled GitHub workflow is preserved verbatim under
+`.github/upstream-workflows/eval.yml` and in upstream history. It is inactive in
+this private copy: the current GitHub credential cannot create active workflow
+files, and account permissions have not been expanded for this preparation.
+Runtime source, tests and local check scripts are unchanged.
+
 ## Current state
 
 Apollo is now the required implementation foundation. This preparation adds
