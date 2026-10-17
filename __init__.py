@@ -65,6 +65,9 @@ CALENDAR_PEEK_SCHEMA = {
 
 
 def register(ctx):
+    from . import care_plugin
+    if care_plugin.enabled(ctx):
+        return care_plugin.register(ctx)
     try:
         from . import analysis_tools, commands, food, query
     except ImportError:

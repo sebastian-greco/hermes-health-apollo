@@ -12,10 +12,11 @@ from . import store
 CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
-def log_food(day: str, description: str, analysis_text: str | dict | None = None) -> dict:
+def log_food(day: str, description: str, analysis_text: str | dict | None = None,
+             *, persist_narrative: bool = False, request_id: str | None = None) -> dict:
     parsed = _parse_analysis(analysis_text)
     items_json = json.dumps(parsed, sort_keys=True) if parsed is not None else None
-    if items_json is None:
+    if items_json is None and not persist_narrative:
         return {
             "id": None,
             "day": day,
@@ -26,6 +27,20 @@ def log_food(day: str, description: str, analysis_text: str | dict | None = None
     logged_at = datetime.now(timezone.utc).isoformat()
     store.initialize()
     with sqlite3.connect(store.database_path()) as conn:
+        if request_id is not None:
+            # This optional path is used only by the trusted scoped care adapter.
+            # Keep its retry receipt in Apollo, atomically with the original meal.
+            if not isinstance(request_id, str) or not request_id or len(request_id) > 256:
+                raise ValueError("Invalid meal request identity")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("CREATE TABLE IF NOT EXISTS care_food_requests "
+                         "(request_id TEXT PRIMARY KEY, payload TEXT NOT NULL, result TEXT NOT NULL)")
+            payload = json.dumps([day, description, items_json], sort_keys=True)
+            previous = conn.execute("SELECT payload, result FROM care_food_requests WHERE request_id=?", (request_id,)).fetchone()
+            if previous:
+                if previous[0] != payload:
+                    raise ValueError("Meal request identity conflict")
+                return json.loads(previous[1])
         conn.execute(
             """
             INSERT INTO food_logs(id, day, logged_at, description, items_json)
@@ -33,6 +48,10 @@ def log_food(day: str, description: str, analysis_text: str | dict | None = None
             """,
             (row_id, day, logged_at, description, items_json),
         )
+        result = {"id": row_id, "day": day, "description": description, "items_json": items_json}
+        if request_id is not None:
+            conn.execute("INSERT INTO care_food_requests VALUES (?, ?, ?)",
+                         (request_id, payload, json.dumps(result, sort_keys=True)))
     return {
         "id": row_id,
         "day": day,

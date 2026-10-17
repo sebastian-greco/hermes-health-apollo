@@ -1282,7 +1282,13 @@ def _hermes_command_prefix() -> list[str]:
     if sibling.exists():
         return [str(sibling)]
 
-    if importlib.util.find_spec("hermes_cli.main") is not None:
+    try:
+        module_available = importlib.util.find_spec("hermes_cli.main") is not None
+    except (ImportError, AttributeError, ValueError):
+        # Source-only tools/tests can run without Hermes installed. A missing
+        # parent package must take the existing launcher fallback, not crash.
+        module_available = False
+    if module_available:
         return [sys.executable, "-m", "hermes_cli.main"]
 
     resolved = shutil.which("hermes")

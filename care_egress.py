@@ -19,6 +19,7 @@ from .care_reminders import DeliveryResult
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_MESSAGE_CHARS = 4096
 _ID = re.compile(r"[A-Za-z0-9_.:-]{1,256}\Z")
+_ACTOR_ID = re.compile(r"[A-Za-z0-9_.:@-]{1,128}\Z")
 
 
 class CareEgressError(ValueError):
@@ -35,9 +36,9 @@ class TrustedConversation:
     conversation_id: str = field(repr=False)
 
     def __post_init__(self):
-        if any(not isinstance(value, str) or not _ID.fullmatch(value) for value in (
-            self.actor_id, self.scope_id, self.config_entry_id, self.conversation_id
-        )):
+        if (any(not isinstance(value, str) or not _ACTOR_ID.fullmatch(value) for value in (self.actor_id, self.scope_id))
+                or any(not isinstance(value, str) or not _ID.fullmatch(value)
+                       for value in (self.config_entry_id, self.conversation_id))):
             raise CareEgressError("invalid trusted conversation binding")
 
 

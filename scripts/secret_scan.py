@@ -11,6 +11,13 @@ from typing import Iterable
 
 
 MAX_TEXT_BYTES = 2_000_000
+# Reviewed source documentation in this private derivative. Only path blocking
+# is exempted; every content/credential check below still runs on these files.
+REVIEWED_SOURCE_DOCS = frozenset("docs/casita/" + name for name in (
+    "PLAN.md", "NEXT_SESSION_PROMPT.md", "CORE_API.md", "REUSE_MAP.md",
+    "DOCUMENTS.md", "DRIVE_AUTH.md", "REMINDERS.md", "EGRESS.md",
+    "EXTRACTION.md", "HERMES_COMPATIBILITY.md", "INSTALL.md", "STATUS.md", "REPORTS.md",
+))
 SKIP_ALL_FILE_DIRS = {
     ".git",
     ".pytest_cache",
@@ -196,7 +203,7 @@ def redact(value: str) -> str:
 def scan_path(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     blocked = path_matches(BLOCKED_PATH_PATTERNS, path)
-    if blocked:
+    if blocked and path.as_posix() not in REVIEWED_SOURCE_DOCS:
         findings.append(
             Finding(
                 path=path.as_posix(),

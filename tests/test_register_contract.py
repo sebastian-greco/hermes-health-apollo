@@ -45,6 +45,45 @@ INSTALLED_MODULES = [
 ]
 
 
+def test_wheel_care_mode_loads_without_repository_init_or_legacy_tools(tmp_path):
+    """Exercise the real wheel's installed-module entrypoint in a clean process."""
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels), str(ROOT)],
+                   check=True, capture_output=True, text=True)
+    installed = tmp_path / "installed"
+    with zipfile.ZipFile(next(wheels.glob("*.whl"))) as archive:
+        archive.extractall(installed)
+    script = '''
+import json, pathlib, sys
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1])
+import health_data_entry
+class Context:
+    state=SimpleNamespace(data_dir=pathlib.Path(sys.argv[2]))
+    llm=object()
+    tools=[]
+    hooks=[]
+    cli=[]
+    def get_config(self,key,default=None):
+        return True if key=='care.enabled' else {'enabled':True,'bindings':[]} if key=='care' else default
+    def register_tool(self,**kw): self.tools.append(kw['name'])
+    def register_hook(self,name,handler): self.hooks.append(name)
+    def register_cli_command(self,name,*args,**kwargs): self.cli.append(name)
+ctx=Context()
+health_data_entry.register(ctx)
+assert ctx.tools==['consult_health'],ctx.tools
+assert ctx.hooks==['post_gateway_admission'],ctx.hooks
+assert ctx.cli==['health-care'],ctx.cli
+assert not pathlib.Path(sys.argv[1],'__init__.py').exists()
+print('installed care entrypoint passed')
+'''
+    env = {"PATH": os.defpath, "HOME": str(tmp_path), "HERMES_HOME": str(tmp_path / "hermes")}
+    completed = subprocess.run([sys.executable, "-c", script, str(installed), str(tmp_path / "state")],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 class FakeContext:
     def __init__(self):
         self.tools = []
@@ -221,9 +260,9 @@ def test_wheel_contains_entry_point_assets(tmp_path):
     assert len(wheels) == 1
     with zipfile.ZipFile(wheels[0]) as archive:
         names = set(archive.namelist())
-        entry_points = archive.read(
-            "hermes_health_data-0.1.0.dist-info/entry_points.txt"
-        ).decode("utf-8")
+        entry_point_paths = [name for name in names if name.endswith(".dist-info/entry_points.txt")]
+        assert len(entry_point_paths) == 1
+        entry_points = archive.read(entry_point_paths[0]).decode("utf-8")
 
     assert "health_data_assets/plugin.yaml" in names
     assert "health_data_assets/skills/health-coach/SKILL.md" in names

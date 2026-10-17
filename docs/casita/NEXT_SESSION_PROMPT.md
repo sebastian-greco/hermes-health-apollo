@@ -1,10 +1,14 @@
-# Prepared implementation prompt
+# Continuation brief
 
-This prompt is ready for a future implementation session after plan review.
-It does not authorize launching that session merely by preparing this copy.
+The user has now explicitly approved end-to-end source implementation, delegated
+phases, review and fixes. Active work is on `codex/end-to-end`; read `STATUS.md`
+and inspect the branch before making changes. The archived standalone assignment
+must not be restarted. No independent desktop session was launched; collaborators
+work under the coordinating HA session. Structural changes and live activation
+still require the explicit confirmation described in `AGENTS.md`.
 
 ```text
-Extend this private Apollo derivative according to AGENTS.md and
+Continue this private Apollo derivative according to AGENTS.md, STATUS.md and
 docs/casita/PLAN.md. The existing Apollo code is the required base, not an
 optional reference. Begin by mapping its existing store/migrations, source
 lineage, semantic events/observations, queries, food path and plugin surfaces

@@ -1,8 +1,9 @@
 name: health-data
-version: 0.1.0
+version: 0.1.0+casita.1
 kind: standalone
 description: Local health and daily-context data store for Hermes.
 provides_tools:
+  - consult_health
   - health_query
   - health_sync
   - health_log_food
@@ -14,3 +15,5 @@ provides_tools:
   - health_analysis_plan
   - health_analyze
   - health_analysis_explain
+provides_hooks:
+  - post_gateway_admission

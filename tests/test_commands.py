@@ -479,7 +479,9 @@ def test_local_install_copies_git_visible_workspace_and_writes_metadata(
     assert not (destination / ".omx").exists()
     assert metadata_path.exists()
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert metadata["version"] == "0.1.0"
+    import tomllib
+    expected_version = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())["project"]["version"]
+    assert metadata["version"] == expected_version
     assert "installed_at" in metadata
     assert "commit" in metadata
 

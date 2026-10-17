@@ -55,6 +55,9 @@ class Runtime:
     def bindings(self):
         return self.bound
 
+    def _binding(self, origin):
+        return self.bound[0]
+
     def session(self, origin):
         self.session_calls.append(origin)
         assert (origin.actor_id, origin.conversation_id) == ("actor-private", "native-chat-private")
@@ -100,7 +103,14 @@ def test_registration_uses_native_cli_setup_contract(cli, capsys):
 
 
 def test_report_is_private_exclusive_and_not_printed_to_stdout(cli, tmp_path, capsys):
-    runtime = Runtime()
+    module = importlib.import_module(cli.__package__ + ".care_runtime")
+    binding = module.Binding("waha", "actor-private", "native-chat-private", "patient-private",
+                             frozenset({"read", "write", "admin"}))
+    runtime = module.CareRuntime(tmp_path / "runtime", bindings=lambda: [binding], llm=object())
+    origin = module.Origin("waha", "actor-private", "native-chat-private", "synthetic", "native",
+                           "Nota riferita", "2026-10-01T12:00:00Z")
+    runtime.session(origin).append_entry(category_id="journal", request_id="synthetic-entry", source_ref="synthetic",
+        narrative="synthetic-health-data", occurrence_start="2026-10-01T12:00:00Z", uncertainty="exact")
     output = tmp_path / "health-report.json"
     args = argparse.Namespace(action="report", binding=1, output=str(output), start="2026-10-01", end=None,
                               episode_id=None, since_visit_id=None, issue_id=None)
@@ -111,7 +121,6 @@ def test_report_is_private_exclusive_and_not_printed_to_stdout(cli, tmp_path, ca
     assert "synthetic-health-data" not in capsys.readouterr().out
     with pytest.raises(cli.CareCLIError):
         cli.dispatch(args, runtime=runtime, settings=settings)
-    assert len(runtime.session_calls) == 2
 
 
 def test_report_requires_current_read_binding_and_does_not_accept_identity(cli, tmp_path):
@@ -137,7 +146,7 @@ def test_document_file_batch_is_explicit_and_upload_requires_prepare(cli, tmp_pa
             return {"job_id": job_id, "state": "prepared"}
         def upload(self, job_id):
             self.calls.append(("upload", job_id))
-            return {"job_id": job_id, "state": "complete"}
+            return {"job_id": job_id, "state": "uploaded"}
     workflow = Workflow()
     runtime.documents = lambda session: workflow
     source = tmp_path / "test.pdf"

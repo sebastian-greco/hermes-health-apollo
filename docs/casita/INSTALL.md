@@ -9,10 +9,20 @@ to a real account during development or testing.
 
 ## Install the pinned plugin
 
-Use the private `sebastian-greco/hermes-health-apollo` source checkout on the
-HA/Hermes host. Keep its Git remote private and install the exact reviewed
-commit into the active Hermes profile using the repository's local install
-workflow (`make install-local`, then `make verify-local-install`). Do not install
+Hermes supports private Git repositories; this plugin does not need to become
+public. Authenticate GitHub in Hermes's own protected plugin/Git credential
+setup, then install the exact reviewed commit:
+
+```sh
+hermes plugins install https://github.com/sebastian-greco/hermes-health-apollo --ref REVIEWED_COMMIT
+hermes plugins enable health-data
+```
+
+The native installer handles declared dependencies. A host-accessible local Git
+checkout can instead be installed with its `file:///absolute/path` URL and the
+same exact commit. The source-copy `make install-local` workflow is a developer
+alternative; it does not install this derivative's added runtime dependencies.
+Keep the remote private. Do not install
 from a public PyPI package: this private Casita derivative is not published
 there. The installed host must match the Hermes SDK version pinned by the plugin
 release (currently Hermes 0.22.2); update and validate both together.
@@ -26,7 +36,14 @@ records into Git.
 
 ## Enable one private binding
 
-Configure the plugin's native Hermes settings with trusted bindings. A binding
+Configure the plugin's native Hermes settings with trusted bindings. Every
+`care:` fragment below belongs under
+`plugins.entries.health-data.settings`, not the root of Hermes configuration.
+Enable `health-data` in the existing plugin list. Add `casita_health` to the
+existing `platform_toolsets.waha` list while preserving its current toolsets;
+otherwise WhatsApp's tool allowlist will hide `consult_health` even if the plugin
+is installed. Apply these through Hermes's native configuration interface.
+A binding
 is a host-maintained identity and permission grant; it is never inferred from
 the model's text. Use the actual WAHA actor and native Hermes chat alias from the
 existing integration when configuring the live profile. The following values

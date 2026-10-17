@@ -146,6 +146,8 @@ def _select(runtime, settings, number, permission):
     origin = Origin(binding.platform, binding.actor_id, binding.conversation_id,
                     "operator-cli", "operator-cli", "", datetime.now(UTC).isoformat())
     session = runtime.session(origin)  # re-resolves the current trusted host binding
+    if session.authority.scope_id != binding.scope_id or runtime._binding(origin) != binding:
+        raise PermissionError("Binding changed during operator selection")
     session.require(permission)
     return binding, session, config
 
@@ -186,7 +188,8 @@ def dispatch(args, *, runtime, settings):
 
 def _report(args, runtime, settings):
     _, session, _ = _select(runtime, settings, args.binding, "read")
-    report = session.report(start=args.start, end=args.end, episode_id=args.episode_id,
+    from .care_reports import assemble_report
+    report = assemble_report(session, start=args.start, end=args.end, episode_id=args.episode_id,
                             since_visit_id=args.since_visit_id, issue_id=args.issue_id)
     output = _write_private_new(args.output, json.dumps(report, ensure_ascii=False, indent=2).encode())
     return {"report_written": True, "entry_count": report.get("entry_count", 0),
@@ -198,6 +201,8 @@ def _drive(args, runtime, settings):
     drive_config = config.get("drive", {}).get(binding.scope_id)
     if not isinstance(drive_config, dict):
         raise CareCLIError("No Drive connection is configured for this binding")
+    if args.drive_action == "status" and "write" not in session.authority.permissions:
+        return {"drive": {"configured": True, "connection_status": "operator_check_required"}}
     from .care_drive_auth import DriveOAuth
     auth = DriveOAuth.from_config(session, drive_config, runtime_root=runtime.root)
     if args.drive_action == "status":
@@ -236,14 +241,14 @@ def _documents(args, runtime, settings):
             result.update({"prepared": True, "state": job["state"]})
         if args.upload:
             job = workflow.upload(job["job_id"])
-            result.update({"uploaded": job["state"] == "complete", "state": job["state"]})
+            result.update({"uploaded": job["state"] == "uploaded", "state": job["state"]})
         return result
     if action == "prepare":
         job = workflow.prepare(args.job_id)
         return {"job_id": job["job_id"], "prepared": True, "state": job["state"]}
     if action == "upload":
         job = workflow.upload(args.job_id)
-        return {"job_id": job["job_id"], "uploaded": job["state"] == "complete", "state": job["state"]}
+        return {"job_id": job["job_id"], "uploaded": job["state"] == "uploaded", "state": job["state"]}
     raise CareCLIError("Unknown document action")
 
 

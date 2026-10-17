@@ -193,7 +193,7 @@ def test_unmatched_or_malformed_success_response_remains_unknown(route, response
 
 
 @pytest.mark.parametrize("url", [
-    "http://ha.example.test", "wss://user:password@ha.example.test",
+    "http://ha.example.test", "wss://user:password@example.test",
     "wss://ha.example.test/private/path", "wss://ha.example.test?token=secret",
     "wss://ha.example.test:invalid",
 ])
