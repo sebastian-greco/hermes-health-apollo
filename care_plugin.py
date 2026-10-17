@@ -5,16 +5,20 @@ from datetime import UTC, datetime
 import json
 from contextvars import copy_context
 import threading
+from jsonschema.exceptions import ValidationError
 
 from .care_runtime import Binding, CareRuntime, Origin
 
 
 PARAMETERS = {"type": "object", "properties": {
     "request": {"type": "string", "maxLength": 1200,
-                "description": "Breve indicazione per lo specialista; userà il messaggio originale autorizzato."}},
+                "description": "Breve indicazione per lo specialista; userà il messaggio originale autorizzato."},
+    "action": {"enum": ["consult", "status", "cancel"], "default": "consult"},
+    "job_id": {"type": "string", "maxLength": 128}},
     "required": ["request"], "additionalProperties": False}
 
 active_runtime = None  # profile-scoped native module; diagnostic host handle only
+active_dispatcher = None
 
 
 def enabled(ctx):
@@ -23,7 +27,7 @@ def enabled(ctx):
 
 
 def register(ctx):
-    global active_runtime
+    global active_runtime, active_dispatcher
     def settings():
         value = ctx.get_config("care", {})
         return value if isinstance(value, dict) else {}
@@ -181,31 +185,72 @@ def register(ctx):
                 if result:
                     changed()
                     return {"action": "handled", "reply": "Confermato: promemoria attivato."}
-        except (ValueError, PermissionError, KeyError, TypeError):
+        except (ValueError, PermissionError, KeyError, TypeError, ValidationError):
             # Failed receipt -> later consult fails closed. Never leak raw user
             # text, token transport errors or local paths into Hermes logs.
             if text.strip().startswith(("CONFERMO PIANO ", "CONFERMO PROMEMORIA ")):
                 return {"action": "handled", "reply": "Il piano non è stato attivato: conferma scaduta, permesso mancante o servizio promemoria non attivo."}
         return None
 
-    def handler(args, **kwargs):
+    from .care_dispatch import HealthDispatcher, FINISH_PARAMETERS
+    from .care_specialist import ACTION_SCHEMAS
+    dispatcher = HealthDispatcher(ctx, runtime)
+    # A newly registered plugin owns no surviving child capabilities. Native
+    # runs do not resume after process/plugin reload; retain committed receipts
+    # and mark abandoned work uncertain instead of silently launching it again.
+    for scope_id in {binding.scope_id for binding in bindings() if "read" in binding.permissions}:
+        dispatcher.jobs.reconcile_scope(scope_id, active_child_ids=())
+    active_dispatcher = dispatcher
+    ctx.on_unload(dispatcher.close)
+
+    def handler(args, *, parent_agent=None, **kwargs):
         try:
-            if not isinstance(args, dict) or set(args) != {"request"}:
-                raise ValueError("Invalid dispatcher arguments")
+            from agent.subagent_lifecycle import get_active_subagent_parent
+            parent_agent = get_active_subagent_parent()
+            from jsonschema import Draft202012Validator
+            Draft202012Validator(PARAMETERS).validate(args)
             from gateway import session_context as sc
             from agent.delegation_context import is_delegated_child_process_context
             # Require explicitly bound ContextVars, not os.environ fallback.
             if (is_delegated_child_process_context() or not sc.session_context_engaged()
-                    or sc._SESSION_KEY.get() is sc._UNSET
-                    or sc._SESSION_MESSAGE_ID.get() is sc._UNSET):
+                    or any(var.get() is sc._UNSET for var in
+                           (sc._SESSION_KEY, sc._SESSION_PLATFORM, sc._SESSION_USER_ID, sc._SESSION_CHAT_ID))):
                 raise PermissionError("No admitted parent turn")
-            origin = runtime.admitted(platform=sc.get_session_env("HERMES_SESSION_PLATFORM"),
-                actor_id=sc.get_session_env("HERMES_SESSION_USER_ID"),
-                conversation_id=sc.get_session_env("HERMES_SESSION_CHAT_ID"),
-                message_id=sc.get_session_env("HERMES_SESSION_MESSAGE_ID"),
-                session_key=sc.get_session_env("HERMES_SESSION_KEY"))
-            return json.dumps(runtime.consult(origin, request=args["request"]), ensure_ascii=False)
-        except (ValueError, PermissionError, KeyError, TypeError):
+            action = args.get("action", "consult")
+            job_id = args.get("job_id")
+            if action == "status":
+                # Internal native completion turns deliberately have no human
+                # admission event. A read may use the host-bound current route,
+                # with fresh scope checks; it cannot create a job or mutate data.
+                if parent_agent is None:
+                    raise PermissionError("No native parent for care status")
+                origin = Origin(platform=sc.get_session_env("HERMES_SESSION_PLATFORM"),
+                    actor_id=sc.get_session_env("HERMES_SESSION_USER_ID"),
+                    conversation_id=sc.get_session_env("HERMES_SESSION_CHAT_ID"),
+                    message_id="care-status", text="", received_at=datetime.now(UTC).isoformat(),
+                    session_key=sc.get_session_env("HERMES_SESSION_KEY"))
+                runtime.session(origin).require("read")
+            else:
+                if sc._SESSION_MESSAGE_ID.get() is sc._UNSET:
+                    raise PermissionError("No admitted human message")
+                origin = runtime.admitted(platform=sc.get_session_env("HERMES_SESSION_PLATFORM"),
+                    actor_id=sc.get_session_env("HERMES_SESSION_USER_ID"),
+                    conversation_id=sc.get_session_env("HERMES_SESSION_CHAT_ID"),
+                    message_id=sc.get_session_env("HERMES_SESSION_MESSAGE_ID"),
+                    session_key=sc.get_session_env("HERMES_SESSION_KEY"))
+            if action == "status":
+                result = dispatcher.status(origin, job_id) if job_id else {
+                    "jobs": [{k: row[k] for k in ("job_id", "state")} for row in dispatcher.jobs.list(origin, limit=10)]}
+            elif action == "cancel":
+                if not job_id:
+                    raise ValueError("Cancellation requires a job")
+                result = dispatcher.cancel(origin, job_id)
+            else:
+                if parent_agent is None or job_id:
+                    raise PermissionError("No native parent agent")
+                result = dispatcher.dispatch(origin, args["request"], parent_agent=parent_agent)
+            return json.dumps(result, ensure_ascii=False)
+        except (ValueError, PermissionError, KeyError, TypeError, ValidationError):
             return json.dumps({"outcome": "refused", "code": "care_request_refused",
                                "message": "Richiesta salute non completata; serve verificare contesto o autorizzazione."})
         except Exception:
@@ -216,8 +261,29 @@ def register(ctx):
         schema={"name": "consult_health", "description":
             "Delega allo specialista salute: diari, sintomi, episodi, pasti, documenti e riepiloghi. "
             "Usa il messaggio originale del turno; non trasferire qui la cronologia di Casita. "
+            "Lavora in background e restituisce subito un riferimento: resta disponibile e riferisci il risultato quando arriva. "
+            "Status legge risultati/domande o elenca attività; cancel interrompe un job. "
             "Comunica solo risultati salvati/confermati e chiarimenti restituiti.",
             "parameters": PARAMETERS})
+    for operation, arguments in ACTION_SCHEMAS.items():
+        def native_action(args, *, parent_agent=None, _operation=operation, **kwargs):
+            from agent.subagent_lifecycle import get_active_subagent_parent
+            parent_agent = get_active_subagent_parent()
+            if not isinstance(args, dict) or set(args) != {"action_id", "args"}:
+                return json.dumps({"status": "refused", "code": "health_action_not_completed"})
+            return dispatcher.action({**args, "op": _operation}, parent_agent=parent_agent)
+        name = "health_" + operation
+        ctx.register_tool(name=name, toolset="casita_health_specialist", handler=native_action,
+            schema={"name": name, "description": "Azione Apollo dello specialista: " + operation + ". Usa un action_id stabile per evitare duplicati.",
+                    "parameters": {"type": "object", "properties": {
+                        "action_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]{1,48}$"}, "args": arguments},
+                        "required": ["action_id", "args"], "additionalProperties": False}})
+    def native_finish(args, **kwargs):
+        from agent.subagent_lifecycle import get_active_subagent_parent
+        return dispatcher.finish(args, parent_agent=get_active_subagent_parent())
+    ctx.register_tool(name="health_finish", toolset="casita_health_specialist", handler=native_finish,
+        schema={"name": "health_finish", "description": "Termina la richiesta e consegna le ricevute a Casita.",
+                "parameters": FINISH_PARAMETERS})
     ctx.register_hook("post_gateway_admission", admitted)
     from .care_cli import register_cli
     register_cli(ctx, runtime, settings)

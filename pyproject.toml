@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-health-data"
-version = "0.1.0+casita.1"
+version = "0.1.0+casita.2"
 description = "Apollo local health data with an opt-in Casita care specialist, documents and reminders."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -38,6 +38,9 @@ py-modules = [
   "care_specialist",
   "care_runtime",
   "care_plugin",
+  "care_dispatch",
+  "care_jobs",
+  "care_native",
   "care_documents",
   "care_reminders",
   "care_drive_auth",

@@ -1,7 +1,7 @@
 """The health specialist's private prompt and finite action vocabulary.
 
-Only consult_health is registered in the parent. These actions are interpreted
-by trusted Python handlers, not added to Casita's general tool registry.
+Only consult_health is exposed in the parent. Native child-only health_* tools
+loads these operations in the dedicated specialist toolset.
 """
 from __future__ import annotations
 
@@ -32,6 +32,24 @@ Le informazioni precedenti e le ultime risposte sono qui, non nella memoria di
 Casita. Se manca un dettaglio necessario, restituisci question. done=false
 per leggere risultati prima di decidere l'azione successiva. Non è necessario
 fornire una risposta narrativa: Casita riceverà ricevute e rapporti verificabili.
+"""
+
+# Native children make their own tool calls; no second planner/model is called
+# by health tools. Keep the legacy structured facade separate for Python users.
+NATIVE_INSTRUCTIONS = INSTRUCTIONS[:INSTRUCTIONS.index("Le informazioni precedenti")] + """
+Sei un vero subagente Hermes in background, distinto dalla conversazione generale
+di Casita. Il contesto salute e il messaggio ammesso sono nei dati forniti dall'host.
+Usa gli strumenti health_* direttamente per leggere e registrare dati in Apollo. Per ogni
+azione scegli un action_id breve e stabile; un nuovo tentativo con lo stesso ID
+deve avere identici argomenti. Gli ID di oggetti sono quelli restituiti dalle
+azioni, non usare riferimenti $0/$1 nel protocollo nativo. Non cambiare action_id
+per aggirare un rifiuto o ripetere una modifica di esito incerto.
+Alla fine chiama health_finish, con question solo se serve un chiarimento della
+persona. Poi termina. Casita riceverà le ricevute delle azioni completate e la
+domanda, non la tua cronologia interna o dichiarazioni non dimostrate.
+Se un'azione fallisce, conserva l'incertezza e chiedi il chiarimento necessario.
+Non usare terminale, browser, MCP di casa, memoria generale, altri agenti o
+strumenti di messaggistica. Non attivare piani o promemoria senza conferma umana.
 """
 
 

@@ -16,7 +16,7 @@ MAX_TEXT_BYTES = 2_000_000
 REVIEWED_SOURCE_DOCS = frozenset("docs/casita/" + name for name in (
     "PLAN.md", "NEXT_SESSION_PROMPT.md", "CORE_API.md", "REUSE_MAP.md",
     "DOCUMENTS.md", "DRIVE_AUTH.md", "REMINDERS.md", "EGRESS.md",
-    "EXTRACTION.md", "HERMES_COMPATIBILITY.md", "INSTALL.md", "STATUS.md", "REPORTS.md",
+    "EXTRACTION.md", "HERMES_COMPATIBILITY.md", "INSTALL.md", "STATUS.md", "REPORTS.md", "INTERFACES.md",
 ))
 SKIP_ALL_FILE_DIRS = {
     ".git",

@@ -62,17 +62,20 @@ import health_data_entry
 class Context:
     state=SimpleNamespace(data_dir=pathlib.Path(sys.argv[2]))
     llm=object()
-    tools=[]
+    tools={}
     hooks=[]
     cli=[]
     def get_config(self,key,default=None):
         return True if key=='care.enabled' else {'enabled':True,'bindings':[]} if key=='care' else default
-    def register_tool(self,**kw): self.tools.append(kw['name'])
+    def register_tool(self,**kw): self.tools[kw['name']]=kw['toolset']
+    def on_unload(self,callback): pass
     def register_hook(self,name,handler): self.hooks.append(name)
     def register_cli_command(self,name,*args,**kwargs): self.cli.append(name)
 ctx=Context()
 health_data_entry.register(ctx)
-assert ctx.tools==['consult_health'],ctx.tools
+assert {name for name,toolset in ctx.tools.items() if toolset=='casita_health'}=={'consult_health'},ctx.tools
+assert ctx.tools['health_append_entry']=='casita_health_specialist',ctx.tools
+assert ctx.tools['health_finish']=='casita_health_specialist',ctx.tools
 assert ctx.hooks==['post_gateway_admission'],ctx.hooks
 assert ctx.cli==['health-care'],ctx.cli
 assert not pathlib.Path(sys.argv[1],'__init__.py').exists()

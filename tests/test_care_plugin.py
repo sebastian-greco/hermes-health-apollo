@@ -77,7 +77,8 @@ def test_worker_native_alias_maps_to_fixed_ha_conversation_and_stops(plugin, tmp
     runtime = plugin.register(ctx)
     try:
         assert services[0].started.wait(2)
-        assert set(ctx.tools) == {"consult_health"}
+        assert {name for name, tool in ctx.tools.items() if tool["toolset"] == "casita_health"} == {"consult_health"}
+        assert ctx.tools["health_append_entry"]["toolset"] == "casita_health_specialist"
         assert runtime.reminders_enabled is True
         egress = egresses[0]
         assert egress.route.conversation_id == "direct-opaque-ha-id"

@@ -1,8 +1,13 @@
 # Casita care operator setup
 
 This plugin keeps Apollo's database, documents, OAuth state and tokens on the
-Hermes host. Cloud model calls receive only the bounded specialist context;
-Google OAuth, reports, file intake and reminder delivery are host operations.
+Hermes host. Casita stays the conversational interface. For a health task,
+Hermes starts a native background child with its own bounded health context and
+restricted tool catalog; the child uses Hermes' configured model and provider
+credentials. Apollo stores the job and verified action receipts. The native
+completion wakeup carries a job reference, and Casita must retrieve the current
+result through a fresh, authorized status read.
+
 This install procedure is for the private Hermes instance on the Home Assistant
 mini PC. It does not install Hermes on a personal computer and does not connect
 to a real account during development or testing.
@@ -11,15 +16,17 @@ to a real account during development or testing.
 
 Hermes supports private Git repositories; this plugin does not need to become
 public. Authenticate GitHub in Hermes's own protected plugin/Git credential
-setup, then install the exact reviewed commit:
+setup, then install the exact final reviewed private commit (replace the
+placeholder only after branch review):
 
 ```sh
 hermes plugins install https://github.com/sebastian-greco/hermes-health-apollo --ref REVIEWED_COMMIT
 hermes plugins enable health-data
 ```
 
-The native installer handles declared dependencies. A host-accessible local Git
-checkout can instead be installed with its `file:///absolute/path` URL and the
+This source line uses plugin version `0.1.0+casita.2` and the Hermes 0.22.2
+native-child compatibility surface. The native installer handles declared
+dependencies. A host-accessible local Git checkout can instead be installed with its `file:///absolute/path` URL and the
 same exact commit. The source-copy `make install-local` workflow is a developer
 alternative; it does not install this derivative's added runtime dependencies.
 Keep the remote private. Do not install
@@ -39,12 +46,13 @@ records into Git.
 Configure the plugin's native Hermes settings with trusted bindings. Every
 `care:` fragment below belongs under
 `plugins.entries.health-data.settings`, not the root of Hermes configuration.
-Enable `health-data` in the existing plugin list. Add `casita_health` to the
-existing `platform_toolsets.waha` list while preserving its current toolsets;
-otherwise WhatsApp's tool allowlist will hide `consult_health` even if the plugin
-is installed. Apply these through Hermes's native configuration interface.
-A binding
-is a host-maintained identity and permission grant; it is never inferred from
+Enable `health-data` in the existing plugin list. Add the `casita_health`
+toolset to the existing `platform_toolsets.waha` list while preserving its
+current toolsets; otherwise WhatsApp's allowlist will hide the parent
+`consult_health` tool. Do not add `casita_health_specialist` to Casita's general
+toolset. Hermes loads that second catalog only for the named health child.
+Apply these through Hermes's native configuration interface. A binding is a
+host-maintained identity and permission grant; it is never inferred from
 the model's text. Use the actual WAHA actor and native Hermes chat alias from the
 existing integration when configuring the live profile. The following values
 are deliberately synthetic and will not route to any real conversation:
@@ -64,11 +72,51 @@ care:
 ```
 
 Start with a single private scope for Sebastian. Give Lucila a distinct private
-scope and binding later. A shared Elio-care group must be an intentionally
+scope and binding later, after choosing separate Hermes profiles/stores or
+fencing general explicit child-transcript reads as described in
+`HERMES_COMPATIBILITY.md`. Apollo grants do not restrict Hermes' own transcript
+reader. A shared Elio-care group must be an intentionally
 configured shared scope with both authorized caregivers; do not point private
-adult bindings at that shared scope. The host must check WhatsApp sender and
-conversation identity against these configured bindings before invoking the
-care specialist.
+adult bindings at that shared scope. The host checks WhatsApp sender and
+conversation identity against these configured bindings before admitting work
+or returning its status. Never accept a patient, actor or scope ID from the
+model as an authorization decision.
+
+## Using the background health specialist
+
+Casita's parent tool is `consult_health` in `casita_health`. It accepts
+`action: consult`, `status` or `cancel`. A consult uses the exact admitted human
+message as its source; the short `request` field is only a routing hint. Hermes
+returns a job ID promptly while a native child works in the background. When
+Hermes wakes Casita after completion, the wakeup contains only that reference;
+Casita must call `consult_health` with `action: status` and the same `job_id`
+before reporting saved data or asking the returned question.
+
+Synthetic tool argument examples:
+
+```json
+{"request":"Registra il sintomo riferito","action":"consult"}
+{"request":"","action":"status","job_id":"0123456789abcdef0123456789abcdef"}
+{"request":"","action":"cancel","job_id":"0123456789abcdef0123456789abcdef"}
+```
+
+The child has its own `casita_health_specialist` catalog: it can read/write the
+configured Apollo scope through bounded `health_*` operations and must call
+`health_finish`. It does not receive Casita's full chat transcript, general
+memory, house-control tools, shell, browser, delegation or message-sending
+tools. It receives only the admitted health message plus bounded relevant
+Apollo context. The plugin stores the source/job/action receipts in the existing
+scope database, not a second health database.
+
+Job states include `queued`, `running`, `awaiting_user`, `completed`,
+`cancel_requested`, `cancelled`, `failed` and `unknown`. A repeated source
+message returns its original job. On process/plugin restart, abandoned running
+jobs become `unknown` and are not relaunched automatically; inspect the status
+and verify any uncertain effects before starting new work. Cancellation revokes
+child actions immediately, asks Hermes to interrupt the native child, and
+suppresses late results. These states do not establish whether a medicine was
+taken; reminder acknowledgment and actual reported administration remain
+separate.
 
 Hermes' operator command is `hermes health-care status`. It displays binding
 indices and permission flags, never actor IDs, conversation IDs, scope names,
