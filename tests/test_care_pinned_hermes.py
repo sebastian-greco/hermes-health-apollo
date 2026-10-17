@@ -181,10 +181,16 @@ with patch.object(socket.socket, "connect", deny_network), \
         databases = list(home.rglob("apollo.sqlite3"))
         assert len(databases) == 1, databases
         database = databases[0]
+        module = runtime.manager._plugins["health-data"].module
+        native_runtime = module.care_plugin.active_runtime
+        admitted = native_runtime.admitted(platform="waha", actor_id="synthetic-adult",
+            conversation_id="synthetic-private", message_id="synthetic-message",
+            session_key="synthetic-native-session")
+        assert admitted.text == message
         with sqlite3.connect(database) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM care_ingress").fetchone()[0] == 1
-            admitted = json.loads(connection.execute("SELECT origin_json FROM care_ingress").fetchone()[0])
-            assert admitted["text"] == message
+            # Admission alone must not retain general Casita messages in health
+            # storage; only the later selected consult persists this receipt.
+            assert connection.execute("SELECT COUNT(*) FROM care_ingress").fetchone()[0] == 0
 
         for overrides in ({"user_id": "synthetic-attacker"}, {"chat_id": "other-private"},
                           {"message_id": "unadmitted-message"}, {"session_key": "unadmitted-session"}):
@@ -234,6 +240,7 @@ with patch.object(socket.socket, "connect", deny_network), \
         # Evidence is the actual Apollo schema and canonical projection, not a
         # mock datastore or replacement implementation from the archived repo.
         with sqlite3.connect(database) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM care_ingress").fetchone()[0] == 2
             assert connection.execute("SELECT COUNT(*) FROM care_entries").fetchone()[0] == 1
             assert connection.execute("SELECT COUNT(*) FROM care_entry_revisions").fetchone()[0] == 2
             saved = json.loads(connection.execute("SELECT payload_json FROM care_entries").fetchone()[0])

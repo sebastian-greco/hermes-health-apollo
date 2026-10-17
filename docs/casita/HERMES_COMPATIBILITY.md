@@ -45,8 +45,10 @@ and descriptions are synthetic, and temporary files are removed afterward.
   registers `post_gateway_admission`. Its sole model argument is `request`.
   Apollo's legacy general tools and the specialist's internal actions are not
   registered in the parent's catalog in care mode.
-- Actual `PluginManager.ainvoke_hook("post_gateway_admission", ...)` saves a
-  trusted admission receipt. Supplying native session identity without that
+- Actual `PluginManager.ainvoke_hook("post_gateway_admission", ...)` creates a
+  trusted admission receipt in bounded process memory. Only messages selected
+  for care or explicit confirmations are subsequently persisted; unrelated
+  general Casita conversation is not copied into health storage. Supplying native session identity without that
   receipt fails. Environment-only identity also fails.
 - Actual registry dispatch reads host-bound session ContextVars. Unknown actor,
   chat, message or native session keys and model-supplied scope overrides fail
