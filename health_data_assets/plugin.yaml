@@ -1,5 +1,5 @@
 name: health-data
-version: 0.1.0+casita.2
+version: 0.1.0+casita.3
 kind: standalone
 description: Local health and daily-context data store for Hermes.
 provides_tools:
