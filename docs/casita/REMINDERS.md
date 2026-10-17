@@ -18,6 +18,10 @@ activation directly. The receipt is bound to one actor, scope, plan, and version
 revised text requires a new confirmation. `revise_plan` supersedes the current
 version, cancels its pending reminders, and stores a new draft. `cancel_plan`
 disables reminders and retains past plan versions and reported administrations.
+If trusted ingress crashes after activating a plan but before acknowledging the
+command, replaying the exact same persisted confirmation returns the existing
+schedule. A different confirmation, revised version, or cancelled plan cannot
+use that replay path.
 
 Instructions are stored as given. This code does not calculate doses, infer
 frequency from free text, recommend catch-up doses, or automatically administer
@@ -53,8 +57,16 @@ down longer than the configured lateness window (30 minutes by default), overdue
 ready occurrences expire. The code never converts an expired dose reminder into
 an instruction to take a missed dose. Daily recurrence materialization skips dates
 older than the lateness window instead of backfilling an unbounded history. A
-running worker calls `dispatch_due`; this
-module does not choose its cadence or install the worker.
+host-managed `run_forever(stop_event, wake_event, egress)` worker pumps due work
+on startup, waits until the next exact occurrence or materialization deadline,
+and wakes early when the host signals `wake_event` after a plan change. Expired
+leases are recovered as uncertain sends and looked up, never blindly resent.
+Remaining uncertain sends are reconciled in bounded batches with exponential
+backoff from one minute up to thirty minutes. When stopping, the host sets both
+the stop and wake events so a sleeping worker exits immediately. This is an
+in-process service lifecycle, not an installed service, cron job, or HA polling
+automation; the host remains responsible for starting and stopping it and for
+signaling writes.
 
 Each send gets a stable `client_request_id`. The outbox leases an occurrence,
 requires an injected `authorize_current(authority)` callback that checks the
@@ -83,11 +95,13 @@ must stop dispatch and revoke/remap its authority when a route grant changes.
   `acknowledge_reminder`, `record_administration`, and controlled dispatch.
 - Read path: `get_plan`, `list_upcoming`, and `get_reminder` (including attempt
   history).
-- Worker path: `dispatch_due(egress)` and `reconcile_unknown(egress)`.
+- Worker path: `run_forever(stop_event, wake_event, egress)` for a host-managed
+  lifecycle, plus `dispatch_due(egress)` and `reconcile_unknown(egress)` for
+  focused host integration or testing.
 
 All operations use the same Apollo database and an authorized `CareSession`.
 Reminder schema creation is additive and is executed inside the session's
 transaction. This implementation has synthetic SQLite tests only; Hermes tool
 registration, trusted WhatsApp confirmation handling, a concrete egress adapter,
-worker scheduling, migration against a real Apollo database, and user acceptance
-remain separate integration work.
+host lifecycle/wake wiring, migration against a real Apollo database, and user
+acceptance remain separate integration work.

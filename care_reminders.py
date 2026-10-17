@@ -926,6 +926,117 @@ class CareReminderService:
                     result["unknown"] += 1
         return result
 
+    def run_forever(
+        self,
+        stop_event: Any,
+        wake_event: Any,
+        egress: ReminderEgress,
+        *,
+        batch_size: int = 20,
+        reconcile_batch_size: int = 20,
+        first_reconcile_delay: float = 60.0,
+        max_reconcile_delay: float = 1800.0,
+    ) -> None:
+        """Run the durable outbox until stopped, waiting for deadlines or a wake.
+
+        The host owns this worker's thread/task lifecycle and sets ``wake_event``
+        after a plan or reminder change. On startup the first pump hydrates due
+        work from SQLite and turns expired leases into uncertain deliveries for
+        reconciliation. No periodic HA automation is required.
+
+        Uncertain provider outcomes are looked up immediately after the first
+        pump, then at bounded exponential intervals while any remain. A restart
+        starts with one immediate lookup; the stable transport request ID makes
+        that safe. This deliberately does not retry a send whose outcome is
+        unknown.
+        """
+        self.session.require("write")
+        if not 1 <= batch_size <= 100 or not 1 <= reconcile_batch_size <= 200:
+            raise ReminderError("scheduler batch limits are outside the safe range")
+        if first_reconcile_delay < 1 or max_reconcile_delay < first_reconcile_delay:
+            raise ReminderError("reconciliation backoff bounds are invalid")
+        if not all(hasattr(event, name) for event in (stop_event, wake_event)
+                   for name in ("is_set", "wait", "clear")):
+            raise ReminderError("scheduler requires event objects with is_set, wait, and clear")
+
+        reconcile_delay = first_reconcile_delay
+        reconcile_due = self._now()
+        while not stop_event.is_set():
+            # Clear before doing work: a concurrent writer after this point leaves
+            # the event set, so the subsequent wait returns immediately.
+            wake_event.clear()
+            now = self._now()
+            self.dispatch_due(egress, now=now, limit=batch_size)
+
+            if now >= reconcile_due:
+                self.reconcile_unknown(egress, limit=reconcile_batch_size)
+                remaining = self._reconciliation_pending_count()
+                if remaining:
+                    reconcile_due = self._now() + timedelta(seconds=reconcile_delay)
+                    reconcile_delay = min(reconcile_delay * 2, max_reconcile_delay)
+                else:
+                    reconcile_due = self._now()
+                    reconcile_delay = first_reconcile_delay
+            else:
+                remaining = self._reconciliation_pending_count()
+                if not remaining:
+                    reconcile_due = self._now()
+                    reconcile_delay = first_reconcile_delay
+
+            if stop_event.is_set():
+                return
+            now = self._now()
+            deadline = self._next_scheduler_deadline(now)
+            if remaining:
+                deadline = reconcile_due if deadline is None else min(deadline, reconcile_due)
+            timeout = None if deadline is None else max(0.0, (deadline - now).total_seconds())
+            wake_event.wait(timeout)
+
+    def _reconciliation_pending_count(self) -> int:
+        """Count only outcomes for which a provider lookup is still required."""
+        with self._connection("read") as conn:
+            return conn.execute(
+                """SELECT COUNT(*) FROM care_reminder_attempts a
+                   JOIN care_reminder_occurrences o
+                     ON o.scope_id=a.scope_id AND o.occurrence_id=a.occurrence_id
+                   WHERE a.scope_id=? AND (
+                     (o.status='unknown' AND a.status IN ('started','unknown'))
+                     OR (o.status='cancelled' AND a.status IN ('started','unknown_after_cancel'))
+                     OR a.status='unknown_stale'
+                   )""",
+                (self.scope_id,),
+            ).fetchone()[0]
+
+    def _next_scheduler_deadline(self, now: datetime) -> datetime | None:
+        """Return the next exact durable deadline that can wake the outbox."""
+        with self._connection("read") as conn:
+            rows = conn.execute(
+                """SELECT MIN(deadline) FROM (
+                     SELECT o.scheduled_at AS deadline
+                     FROM care_reminder_occurrences o
+                     JOIN care_reminder_schedules s
+                       ON s.scope_id=o.scope_id AND s.schedule_id=o.schedule_id
+                     WHERE o.scope_id=? AND s.enabled=1 AND o.status='ready'
+                     UNION ALL
+                     SELECT o.lease_until AS deadline
+                     FROM care_reminder_occurrences o
+                     WHERE o.scope_id=? AND o.status='leased' AND o.lease_until IS NOT NULL
+                     UNION ALL
+                     SELECT s.start_at AS deadline
+                     FROM care_reminder_schedules s
+                     WHERE s.scope_id=? AND s.enabled=1 AND s.start_at>?
+                   )""",
+                (self.scope_id, self.scope_id, self.scope_id, _aware_iso(now + timedelta(days=8))),
+            ).fetchone()[0]
+        if rows is None:
+            return None
+        deadline = _parse_aware(rows)
+        if deadline > now + timedelta(days=8):
+            # Schedules farther away are materialized once they enter the
+            # worker's eight-day durable occurrence horizon.
+            deadline -= timedelta(days=8)
+        return max(now, deadline)
+
     def _dispatch_one(self, egress: ReminderEgress, occurrence_id: str,
                       now: datetime, lease_seconds: int) -> str:
         now_iso = _aware_iso(now)

@@ -62,6 +62,40 @@ class FakeEgress:
         return reminders.DeliveryResult("unknown")
 
 
+class StopOnWait:
+    def __init__(self):
+        self.stopped = False
+        self.timeouts = []
+
+    def is_set(self):
+        return self.stopped
+
+    def wait(self, timeout=None):
+        self.timeouts.append(timeout)
+        self.stopped = True
+        return False
+
+    def clear(self):
+        pass
+
+
+class WakeEvent:
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+        self.timeouts = []
+
+    def is_set(self):
+        return False
+
+    def clear(self):
+        pass
+
+    def wait(self, timeout=None):
+        self.timeouts.append(timeout)
+        self.stop_event.stopped = True
+        return False
+
+
 store = load_module("store")
 care_store = load_module("care_store")
 reminders = load_module("care_reminders")
@@ -349,3 +383,41 @@ def test_schedule_requires_timezone_aware_instants_and_valid_local_times():
     )
     with pytest.raises(reminders.ReminderError, match="HH:MM"):
         invalid.validate()
+
+
+def test_run_forever_hydrates_due_work_and_waits_for_next_durable_deadline(world):
+    _, _, clock, service = world
+    schedule = reminders.ReminderSchedule.daily(
+        times=["09:00"], timezone="UTC", start_date=date(2026, 3, 27)
+    )
+    _propose_and_activate(world, schedule=schedule)
+    clock.value = datetime(2026, 3, 27, 9, 0, tzinfo=UTC)
+    egress = FakeEgress()
+    stop = StopOnWait()
+
+    wake = WakeEvent(stop)
+    service.run_forever(stop, wake, egress)
+
+    assert len(egress.sent) == 1
+    assert wake.timeouts == [pytest.approx(24 * 60 * 60)]
+
+
+def test_run_forever_backs_off_unknown_reconciliation_without_blind_resend(world):
+    _, _, clock, service = world
+    schedule = reminders.ReminderSchedule.daily(
+        times=["09:00"], timezone="UTC", start_date=date(2026, 3, 27)
+    )
+    _propose_and_activate(world, schedule=schedule)
+    clock.value = datetime(2026, 3, 27, 9, 0, tzinfo=UTC)
+    egress = FakeEgress(
+        responses=[reminders.DeliveryResult("unknown")],
+        lookup_responses=[reminders.DeliveryResult("unknown")],
+    )
+    stop = StopOnWait()
+
+    wake = WakeEvent(stop)
+    service.run_forever(stop, wake, egress, first_reconcile_delay=60)
+
+    assert len(egress.sent) == 1
+    assert len(egress.lookups) == 1
+    assert wake.timeouts == [60]
