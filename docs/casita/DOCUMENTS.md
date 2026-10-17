@@ -139,3 +139,12 @@ Drive PDF; interrupt a transfer and inspect the durable job before retrying.
 Expected non-actions: no medication plan, reminders, dose record, inferred
 clinical fact or deletion. Restore the prior source commit to roll back code;
 retain the scoped database, originals and upload receipts for reconciliation.
+
+Native route integrations also supply `GoogleDriveAdapter(authorize_current=...)`,
+a zero-argument trusted callback returning exactly `True` only while the original
+care route still grants write access and its Drive configuration is unchanged.
+The adapter checks it before obtaining credentials and again after token refresh,
+immediately before every HTTP attempt, including resumable probes and content
+PUTs. Failure blocks transport with a safe error. A direct trusted-host adapter
+can omit this optional callback; native runtime integrations must wire it so a
+captured session/token capability cannot outlive route revocation.

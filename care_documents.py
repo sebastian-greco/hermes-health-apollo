@@ -101,17 +101,32 @@ class GoogleDriveAdapter:
     An injected transport must preserve the no-redirect and response-size rules.
     """
 
-    def __init__(self, *, folder_id: str, token_provider: Callable[[], str], transport=None):
+    def __init__(self, *, folder_id: str, token_provider: Callable[[], str], transport=None,
+                 authorize_current: Callable[[], bool] | None = None):
         if not isinstance(folder_id, str) or not ID.fullmatch(folder_id):
             raise DriveError("Invalid configured Drive folder")
         self.folder_id = folder_id
+        if authorize_current is not None and not callable(authorize_current):
+            raise DriveError("Invalid current Drive authorization guard")
         self._token_provider = token_provider
         self._transport = transport or google_http_transport
+        self._authorize_current = authorize_current
+
+    def _require_current(self):
+        if self._authorize_current is None:
+            return  # Direct trusted-host adapters retain their explicit capability.
+        try:
+            allowed = self._authorize_current()
+        except Exception:
+            raise DriveError("Current Drive authorization required") from None
+        if allowed is not True:
+            raise DriveError("Current Drive authorization required")
 
     def _request(self, method, url, body=None, content_type=None, *, extra_headers=None, raw=False, resume=False):
         parsed = urlsplit(url)
         if parsed.scheme != "https" or parsed.netloc != "www.googleapis.com" or parsed.fragment:
             raise DriveError("Drive transport destination rejected")
+        self._require_current()
         try:
             token = self._token_provider()
         except Exception:
@@ -122,6 +137,9 @@ class GoogleDriveAdapter:
         if content_type:
             headers["Content-Type"] = content_type
         headers.update(extra_headers or {})
+        # Token refresh can block and the operator can revoke/change the route
+        # meanwhile. Recheck at each request boundary, including resumable PUTs.
+        self._require_current()
         try:
             response = self._transport(method, url, headers, body)
         except Exception:

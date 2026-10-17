@@ -454,3 +454,43 @@ def test_artifact_reader_requires_owned_job_and_cannot_read_arbitrary_digest(env
         workflow.artifact("foreign-job")
     with pytest.raises(docs.DocumentError, match="Output page unavailable"):
         workflow.artifact(job["job_id"], page_number=0)
+
+
+def test_current_drive_guard_rechecks_after_token_provider_before_http(env):
+    docs, *_ = env
+    allowed = [True]
+    sends = []
+
+    def token_provider():
+        allowed[0] = False  # revocation/config change during a blocking refresh
+        return "synthetic-access"
+
+    drive = docs.GoogleDriveAdapter(folder_id="synthetic_folder", token_provider=token_provider,
+        authorize_current=lambda: allowed[0], transport=lambda *args: sends.append(args))
+    import hashlib
+    payload = b"synthetic clinical document bytes"
+    with pytest.raises(docs.DriveError, match="Current Drive authorization"):
+        drive.create(identity="a" * 64, sha256=hashlib.sha256(payload).hexdigest(), name="synthetic.pdf",
+                     mime_type="application/pdf", content=payload)
+    assert sends == []
+
+
+def test_current_drive_guard_rechecks_between_resumable_probe_and_put(env):
+    docs, *_ = env
+    allowed = [True]
+    sends = []
+
+    def transport(method, url, headers, body):
+        sends.append((method, body))
+        allowed[0] = False
+        return docs.HTTPResponse(308, {}, b"")
+
+    drive = docs.GoogleDriveAdapter(folder_id="synthetic_folder", token_provider=lambda: "synthetic-access",
+                                    authorize_current=lambda: allowed[0], transport=transport)
+    import hashlib
+    content = b"synthetic clinical bytes"
+    with pytest.raises(docs.DriveError, match="Current Drive authorization"):
+        drive.resume_upload("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=synthetic",
+                            identity="a" * 64, sha256=hashlib.sha256(content).hexdigest(),
+                            mime_type="application/pdf", content=content)
+    assert sends == [("PUT", b"")]
