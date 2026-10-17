@@ -273,3 +273,67 @@ def test_versioned_measurements_and_report_revision_sources(core):
     assert {r["category_version"] for r in report["measurements"]} == {1, 2}
     assert all(r["count"] == 1 for r in report["measurements"])
     assert [r["source_ref"] for r in report["revision_evidence"][first["entry_id"]]] == ["synthetic:v1", "synthetic:correction"]
+
+
+def test_latest_entries_are_newest_and_default_order_remains_compatible(core):
+    _, _, session = core
+    for index in range(35):
+        append(session, request_id=f"recent-{index}", occurrence_start=f"2026-06-01T12:{index:02d}:00Z", uncertainty="exact")
+    oldest = session.list_entries(limit=30)
+    latest = session.list_entries(limit=30, latest=True)
+    assert len(oldest) == len(latest) == 30
+    assert oldest[0]["request_id"] == "recent-0"
+    assert oldest[-1]["request_id"] == "recent-29"
+    assert latest[0]["request_id"] == "recent-34"
+    assert latest[-1]["request_id"] == "recent-5"
+
+
+def test_report_evidence_caps_preserve_full_counts_aggregates_gaps(core):
+    care, _, session = core
+    for index in range(5):
+        session.append_entry(category_id="measurement", request_id=f"bounded-{index}",
+            source_ref=f"synthetic:{index}", data={"value": index+1, "unit": "mmol/L"},
+            occurrence_start=f"2026-06-0{1+index%2}T12:00:00Z", uncertainty="exact")
+        append(session, request_id=f"undated-{index}")
+    with session.apollo(permission="write"):
+        food = importlib.import_module(care.__name__.rsplit(".", 1)[0] + ".food")
+        for index in range(5):
+            food.log_food("2026-06-01", f"Synthetic meal {index}", {"items": [], "total_estimated_calories": 500})
+    report = session.report(start="2026-06-01", end="2026-06-02", max_entries=1)
+    assert report["entry_count"] == report["unknown_occurrence_count"] == report["food_entry_count"] == 5
+    assert len(report["entries"]) == len(report["unknown_occurrence_entries"]) == len(report["food_entries"]) == 1
+    assert report["evidence"]["truncated"] is True
+    assert report["evidence"]["omitted"] == {"entries": 4, "unknown_occurrence_entries": 4, "food_entries": 4}
+    assert report["measurements"][0]["count"] == 5
+    assert report["measurements"][0]["mean"] == pytest.approx(3)
+    assert report["counts_by_category"] == {"measurement": 5}
+    assert report["gaps"]["days_without_exact_time_entries"] == []
+    with pytest.raises(care.CareError):
+        session.report(start="2026-06-01", max_entries=1001)
+
+
+def test_report_caps_revision_evidence_and_explicitly_reports_omissions(core):
+    _, _, session = core
+    entry = append(session, occurrence_start="2026-06-01T12:00:00Z", uncertainty="exact")
+    for revision in range(1, 29):
+        session.revise_entry(entry["entry_id"], expected_revision=revision,
+            request_id=f"revision-{revision}", source_ref=f"synthetic:revision-{revision}",
+            changes={"narrative": f"Nota aggiornata {revision}"}, reason="Correzione sintetica")
+    report = session.report(start="2026-06-01", end="2026-06-01")
+    assert report["entry_count"] == 1
+    assert len(report["revision_evidence"][entry["entry_id"]]) == 25
+    assert report["revision_evidence"][entry["entry_id"]][-1]["revision"] == 29
+    assert report["evidence"]["omitted_revisions"][entry["entry_id"]] == 4
+    assert report["evidence"]["truncated"] is True
+
+
+@pytest.mark.parametrize("schema", [
+    {"type": ["number", "null"]},
+    {"type": "string", "maxLength": -1},
+    {"type": "array", "maxItems": 1.5},
+    {"type": "number", "minimum": 10, "maximum": 1},
+])
+def test_schema_rejects_unsupported_types_and_invalid_bounds(core, schema):
+    care, _, session = core
+    with pytest.raises(care.CareError):
+        session.define_category("invalid-schema", schema=schema)

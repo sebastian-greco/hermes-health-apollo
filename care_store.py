@@ -249,17 +249,22 @@ class CareSession:
 
     def list_entries(self, *, category_id: str | None = None, case_id: str | None = None,
                      start: str | None = None, end: str | None = None,
-                     include_closed: bool = True, limit: int = 500) -> list[dict]:
+                     include_closed: bool = True, limit: int = 500,
+                     latest: bool = False) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 5000:
             raise CareError("limit must be between 1 and 5000")
+        if type(latest) is not bool:
+            raise CareError("latest must be boolean")
         start, end = _range(start, end)
         with self.connection() as conn:
             if case_id:
                 self._case(conn, case_id)
-            rows = [json.loads(r[0]) for r in conn.execute("SELECT payload_json FROM care_entries ORDER BY COALESCE(occurrence_start, recorded_at), entry_id")]
+            order = "DESC" if latest else "ASC"
+            rows = conn.execute(f"SELECT payload_json FROM care_entries ORDER BY COALESCE(occurrence_start, recorded_at) {order}, entry_id {order}")
             cases = {r[0]: json.loads(r[1]) for r in conn.execute("SELECT case_id, payload_json FROM care_cases")}
             result = []
-            for item in rows:
+            for row in rows:
+                item = json.loads(row[0])
                 if category_id and item["category_id"] != category_id:
                     continue
                 if case_id and not _linked_to(item["links"], case_id, cases):
@@ -269,7 +274,9 @@ class CareSession:
                 if (start or end) and not _overlaps(item, start, end):
                     continue
                 result.append(item)
-            return result[:limit]
+                if len(result) == limit:
+                    break
+            return result
 
     def create_case(self, *, kind: str, title: str, request_id: str, source_ref: str,
                     parent_id: str | None = None, occurred_at: str | None = None,
@@ -353,14 +360,17 @@ class CareSession:
 
     def report(self, *, start: str | None = None, end: str | None = None,
                episode_id: str | None = None, since_visit_id: str | None = None,
-               issue_id: str | None = None) -> dict:
-        """Factual report only. Missing reports never mean absence/recovery/adherence."""
+               issue_id: str | None = None, max_entries: int = 1000) -> dict:
+        """Counts cover all matching heads; bounded evidence reports every omission."""
+        if type(max_entries) is not int or not 1 <= max_entries <= 1000:
+            raise CareError("max_entries must be between 1 and 1000")
         selectors = int(start is not None) + int(episode_id is not None) + int(since_visit_id is not None)
         if selectors != 1:
             raise CareError("Choose a date range, episode, or since-visit report")
         end = end or _now()
         case_filter = episode_id or issue_id
         with self.connection() as conn:
+            conn.execute("BEGIN")  # One consistent head/revision snapshot for this report.
             cases = {r[0]: json.loads(r[1]) for r in conn.execute("SELECT case_id, payload_json FROM care_cases")}
             if episode_id and self._case(conn, episode_id)["kind"] != "episode":
                 raise CareError("episode_id must refer to an episode")
@@ -375,71 +385,109 @@ class CareSession:
                     if not relevant:
                         raise CareError("Visit has no recorded evidence linking it to this issue")
                 start = visit["occurred_at"]
-            all_rows = [json.loads(r[0]) for r in conn.execute("SELECT payload_json FROM care_entries ORDER BY COALESCE(occurrence_start, recorded_at), entry_id")]
-            scoped = [r for r in all_rows if not case_filter or _linked_to(r["links"], case_filter, cases)]
             if episode_id:
-                known = [r["occurrence_start"] for r in scoped if r["occurrence_start"]]
-                case_start = cases[episode_id].get("occurred_at")
-                start = case_start or (min(known) if known else None)
+                start = cases[episode_id].get("occurred_at")
+                if not start:
+                    for row in conn.execute("SELECT payload_json FROM care_entries WHERE occurrence_start IS NOT NULL ORDER BY occurrence_start, entry_id"):
+                        item = json.loads(row[0])
+                        if _linked_to(item["links"], episode_id, cases):
+                            start = item["occurrence_start"]
+                            break
             start, end = _range(start, end)
             if start and end and (date.fromisoformat(end[:10]) - date.fromisoformat(start[:10])).days > 3660:
                 raise CareError("Report interval exceeds ten years")
-            selected = [r for r in scoped if _overlaps(r, start, end)]
-            unknown = [r for r in scoped if r["occurrence_start"] is None]
             definitions = {(r[0], r[1]): json.loads(r[2]) for r in conn.execute("SELECT category_id, version, definition_json FROM care_categories")}
-            revision_evidence = {}
+            selected, unknown = [], []
+            entry_count = unknown_count = uncertain_count = 0
+            counts: dict[str, int] = {}
+            aggregates: dict[tuple, dict] = {}
+            exact_days: set[str] = set()
+            category_days: dict[str, set] = {}
+            for row in conn.execute("SELECT payload_json FROM care_entries ORDER BY COALESCE(occurrence_start, recorded_at), entry_id"):
+                item = json.loads(row[0])
+                if case_filter and not _linked_to(item["links"], case_filter, cases):
+                    continue
+                if item["occurrence_start"] is None:
+                    unknown_count += 1
+                    if len(unknown) < max_entries:
+                        unknown.append(item)
+                    continue
+                if not _overlaps(item, start, end):
+                    continue
+                entry_count += 1
+                if item["uncertainty"] != "exact":
+                    uncertain_count += 1
+                if len(selected) < max_entries:
+                    selected.append(item)
+                category = item["category_id"]
+                counts[category] = counts.get(category, 0) + 1
+                if item["uncertainty"] == "exact":
+                    day = item["occurrence_start"][:10]
+                    exact_days.add(day)
+                    category_days.setdefault(category, set()).add(day)
+                definition = definitions[(category, item["category_version"])]
+                for field, config in definition["observations"].items():
+                    value = item["data"].get(field)
+                    if type(value) not in {int, float}:
+                        continue
+                    unit = item["data"][config["unit_field"]]
+                    key = (category, item["category_version"], field, unit)
+                    aggregate = aggregates.setdefault(key, {"category_id": category,
+                        "category_version": item["category_version"], "field": field, "unit": unit,
+                        "count": 0, "minimum": value, "maximum": value, "mean": 0.0})
+                    aggregate["count"] += 1
+                    aggregate["minimum"] = min(aggregate["minimum"], value)
+                    aggregate["maximum"] = max(aggregate["maximum"], value)
+                    # Weighted means avoid a growing values list and sum overflow.
+                    n = aggregate["count"]
+                    aggregate["mean"] = aggregate["mean"] * ((n-1)/n) + value/n
+            revision_evidence, omitted_revisions = {}, {}
             for entry in selected + unknown:
                 revisions = [json.loads(row[0]) for row in conn.execute(
-                    "SELECT payload_json FROM care_entry_revisions WHERE entry_id=? ORDER BY revision",
+                    "SELECT payload_json FROM care_entry_revisions WHERE entry_id=? ORDER BY revision DESC LIMIT 25",
                     (entry["entry_id"],),
                 )]
+                omitted_revisions[entry["entry_id"]] = max(0, entry["revision"]-len(revisions))
                 revision_evidence[entry["entry_id"]] = [
                     {k: revision.get(k) for k in ("revision", "source_ref", "actor_id", "revised_at", "correction_reason")}
-                    for revision in revisions
+                    for revision in reversed(revisions)
                 ]
-            food_rows = []
-            for r in conn.execute("SELECT * FROM food_logs ORDER BY day, logged_at"):
-                links = [x[0] for x in conn.execute("SELECT case_id FROM care_food_links WHERE food_id=?", (r["id"],))]
+            food_rows, food_count = [], 0
+            for row in conn.execute("SELECT * FROM food_logs ORDER BY day, logged_at"):
+                links = [x[0] for x in conn.execute("SELECT case_id FROM care_food_links WHERE food_id=?", (row["id"],))]
                 if case_filter and not _linked_to(links, case_filter, cases):
                     continue
-                if start and r["day"] < start[:10] or end and r["day"] > end[:10]:
+                if start and row["day"] < start[:10] or end and row["day"] > end[:10]:
                     continue
-                food_rows.append({"food_id": r["id"], "day": r["day"], "description": r["description"], "links": links, "source_ref": f"apollo:food_logs:{r['id']}"})
-        counts: dict[str, int] = {}
-        aggregates: dict[tuple, dict] = {}
-        for r in selected:
-            counts[r["category_id"]] = counts.get(r["category_id"], 0) + 1
-            definition = definitions[(r["category_id"], r["category_version"])]
-            for field, config in definition["observations"].items():
-                value = r["data"].get(field)
-                if type(value) not in {int, float}:
-                    continue
-                unit = r["data"][config["unit_field"]]
-                key = (r["category_id"], r["category_version"], field, unit)
-                item = aggregates.setdefault(key, {"category_id": r["category_id"], "category_version": r["category_version"], "field": field, "unit": unit, "values": []})
-                item["values"].append(value)
-        for item in aggregates.values():
-            values = item.pop("values")
-            item.update(count=len(values), minimum=min(values), maximum=max(values), mean=sum(values)/len(values))
-        exact_days = {r["occurrence_start"][:10] for r in selected if r["uncertainty"] == "exact"}
+                food_count += 1
+                if len(food_rows) < max_entries:
+                    food_rows.append({"food_id": row["id"], "day": row["day"], "description": row["description"], "links": links, "source_ref": f"apollo:food_logs:{row['id']}"})
         days = _days(start, end) if start and end else []
-        gap_days = [d for d in days if d not in exact_days]
+        gap_days = [day for day in days if day not in exact_days]
         category_gaps = {}
         for definition in definitions.values():
             if definition["expected_daily"]:
-                observed = {r["occurrence_start"][:10] for r in selected if r["category_id"] == definition["category_id"] and r["uncertainty"] == "exact"}
-                category_gaps[definition["category_id"]] = [d for d in days if d not in observed]
+                observed = category_days.get(definition["category_id"], set())
+                category_gaps[definition["category_id"]] = [day for day in days if day not in observed]
+        omitted = {"entries": entry_count-len(selected), "unknown_occurrence_entries": unknown_count-len(unknown),
+                   "food_entries": food_count-len(food_rows)}
         return {"scope_id": self.authority.scope_id, "generated_at": _now(), "start": start, "end": end,
                 "episode_id": episode_id, "since_visit_id": since_visit_id, "issue_id": issue_id,
-                "entry_count": len(selected), "counts_by_category": counts,
-                "measurements": list(aggregates.values()), "entries": selected,
+                "entry_count": entry_count, "unknown_occurrence_count": unknown_count, "food_entry_count": food_count,
+                "counts_by_category": counts, "measurements": list(aggregates.values()), "entries": selected,
                 "revision_evidence": revision_evidence,
                 "unknown_occurrence_entries": unknown, "food_entries": food_rows,
+                "evidence": {"limit_per_kind": max_entries,
+                             "revision_limit_per_entry": 25, "omitted_revisions": omitted_revisions,
+                             "truncated": any(omitted.values()) or any(omitted_revisions.values()),
+                             "omitted": omitted, "counts_and_aggregates_cover_all_matches": True,
+                             "order": "oldest_first"},
                 "gaps": {"days_without_exact_time_entries": gap_days, "expected_daily_category_gaps": category_gaps,
                          "interval_unknown": start is None,
                          "meaning": "Nessuna registrazione non significa assenza di sintomi, guarigione o dose non assunta."},
                 "uncertainty": {"interval_or_approximate_entries": [r["entry_id"] for r in selected if r["uncertainty"] != "exact"],
-                                "unknown_time_count": len(unknown)},
+                                "unknown_time_count": unknown_count, "interval_or_approximate_count": uncertain_count,
+                                "entry_ids_limited_to_returned_evidence": True},
                 "cases": [cases[c] for c in dict.fromkeys(c for r in selected + unknown for c in r["links"])],
                 "clinical_inference": False}
 
@@ -663,9 +711,15 @@ def _check_schema(schema):
             check(node["items"])
         if "enum" in node and (not isinstance(node["enum"], list) or not node["enum"]):
             raise CareError("Schema enum must be a nonempty list")
-        for key in ("minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"):
+        for key in ("minimum", "maximum"):
             if key in node and (type(node[key]) not in {int, float} or not math.isfinite(node[key])):
                 raise CareError("Schema bounds must be finite numbers")
+        for key in ("minLength", "maxLength", "minItems", "maxItems"):
+            if key in node and (type(node[key]) is not int or node[key] < 0):
+                raise CareError("Schema length/item bounds must be nonnegative integers")
+        for low, high in (("minimum", "maximum"), ("minLength", "maxLength"), ("minItems", "maxItems")):
+            if low in node and high in node and node[low] > node[high]:
+                raise CareError("Schema bounds are reversed")
     check(schema)
 
 

@@ -66,7 +66,9 @@ in Git.
   category version. Actor and record identity cannot be changed by a caller.
 - `get_entry(entry_id, include_revisions=False)` and
   `list_entries(category_id=None, case_id=None, start=None, end=None,
-  include_closed=True, limit=500)` read current heads. A case filter for an issue
+  include_closed=True, limit=500, latest=False)` read current heads.
+  `latest=True` returns the newest heads first without scanning all results into
+  memory; the default oldest-first order remains compatible. A case filter for an issue
   includes entries linked to its child episodes. A ranged listing excludes
   unknown occurrence; doctor reports return unknown-time evidence separately.
 - `create_case(kind, title, request_id, source_ref, parent_id=None,
@@ -80,7 +82,7 @@ in Git.
 - `link_food(food_id, case_id, source_ref)` links existing Apollo food rows;
   repeated identical links are harmless. It never creates a second food log.
 - `report(start=None, end=None, episode_id=None, since_visit_id=None,
-  issue_id=None)` requires one selector: start of date range, episode, or visit.
+  issue_id=None, max_entries=1000)` requires one selector: start of date range, episode, or visit.
   `issue_id` can narrow a range/since-visit report. A visit used with an issue
   must have explicit shared entry-link evidence connecting them. No visit's
   clinical relevance is inferred from recency alone.
@@ -138,7 +140,14 @@ Days without exact-time logs and opt-in daily category gaps are explicit;
 missing data never becomes zero, a negative symptom, recovery or a missed dose.
 Closed episodes remain available. All report dates are normalized to UTC;
 explicit offset timestamps are accepted, date-only ranges cover UTC days.
-Maximum report range is ten years. An undated episode's interval remains unknown.
+Maximum report range is ten years. Evidence is capped at 1,000 current entries,
+1,000 unknown-time entries and 1,000 food entries (a lower `max_entries` can be
+requested). Revision evidence includes at most the latest 25 revisions per
+returned entry. `evidence.truncated` and exact omission counters make partial
+evidence explicit. Factual counts, numeric aggregates, uncertainty totals and
+missing-day calculations cover **all** matching current heads, including omitted
+evidence. Counts never silently describe only the returned page. Read snapshots
+keep a report consistent with concurrent caregiver corrections. An undated episode's interval remains unknown.
 
 Synthetic verification covers legacy v8 preservation, future-schema refusal,
 custom versioned categories, malformed/deep/oversized JSON, units, trusted
