@@ -138,6 +138,30 @@ def test_plan_requires_trusted_exact_confirmation_and_stays_draft(world):
     assert service.activate_plan(valid)["status"] == "active"
 
 
+def test_exact_activation_receipt_replay_returns_existing_schedule(world):
+    _, session, clock, service = world
+    _, receipt, activated = _propose_and_activate(world)
+
+    replay = service.activate_plan(receipt)
+
+    assert replay["schedule_id"] == activated["schedule_id"]
+    assert replay["occurrences_created"] == 0
+    with sqlite3.connect(session.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM care_reminder_schedules WHERE plan_id='plan-1'"
+        ).fetchone()[0] == 1
+    different = reminders._mint_verified_confirmation(
+        scope_id=session.authority.scope_id,
+        actor_id=session.authority.actor_id,
+        plan_id="plan-1",
+        version=1,
+        source_ref="synthetic-user-confirmation:another-event",
+        confirmed_at=clock(),
+    )
+    with pytest.raises(reminders.ReminderConflict, match="different receipt"):
+        service.activate_plan(different)
+
+
 def test_acknowledging_reminder_is_not_a_medication_administration(world):
     _, session, clock, service = world
     _, _, activated = _propose_and_activate(world)

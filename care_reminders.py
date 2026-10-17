@@ -451,16 +451,38 @@ class CareReminderService:
         now = _aware_iso(now_dt)
         with self._connection("admin") as conn:
             row = conn.execute(
-                """SELECT p.current_version, p.status, v.schedule_json, v.medication, v.instructions
+                """SELECT p.current_version, p.status, v.schedule_json, v.medication, v.instructions,
+                          v.status, v.confirmed_by, v.confirmed_at, v.confirmation_source_ref
                    FROM care_medication_plans p JOIN care_medication_plan_versions v
                    ON v.scope_id=p.scope_id AND v.plan_id=p.plan_id AND v.version=p.current_version
                    WHERE p.scope_id=? AND p.plan_id=?""",
                 (self.scope_id, confirmation.plan_id),
             ).fetchone()
-            if row is None or row[0] != confirmation.version or row[1] != "proposed":
+            if row is None or row[0] != confirmation.version:
                 raise ReminderConflict("confirmed plan version is no longer the current proposal")
             if confirmation.source_ref == "" or confirmation.confirmed_at > now:
                 raise ReminderError("confirmation evidence is invalid")
+            if row[1] == "active" and row[5] == "active":
+                # The ingress may redeliver its exact command after a crash before
+                # it records success. Replaying the same persisted receipt is safe;
+                # a different receipt, revised plan, or cancelled plan is not.
+                if (row[6], row[7], row[8]) != (
+                    self.actor_id, confirmation.confirmed_at, confirmation.source_ref
+                ):
+                    raise ReminderConflict("active plan was confirmed by a different receipt")
+                schedule_row = conn.execute(
+                    "SELECT schedule_id FROM care_reminder_schedules "
+                    "WHERE scope_id=? AND plan_id=? AND plan_version=? "
+                    "ORDER BY created_at LIMIT 1",
+                    (self.scope_id, confirmation.plan_id, confirmation.version),
+                ).fetchone()
+                if schedule_row is None:
+                    raise ReminderConflict("active plan has no persisted reminder schedule")
+                return {"plan_id": confirmation.plan_id, "version": confirmation.version,
+                        "status": "active", "schedule_id": schedule_row[0],
+                        "occurrences_created": 0}
+            if row[1] != "proposed" or row[5] != "proposed":
+                raise ReminderConflict("confirmed plan version is no longer the current proposal")
             schedule_obj = json.loads(row[2])
             schedule = _schedule_from_json(schedule_obj)
             conn.execute(
