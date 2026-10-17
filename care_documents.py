@@ -297,6 +297,8 @@ class DocumentWorkflow:
         self.drive = drive
         if not isinstance(runtime_root, Path) or not runtime_root.is_absolute():
             raise DocumentError("A trusted absolute private artifact root is required")
+        if runtime_root.resolve().is_relative_to(Path(__file__).resolve().parent):
+            raise DocumentError("Medical artifacts must remain outside the plugin source tree")
         # Scope hashes, never model paths, partition a host-owned runtime directory.
         self.root = runtime_root / hashlib.sha256(session.authority.scope_id.encode()).hexdigest()
         with session.connection(permission="write" if writer else "read") as conn:
