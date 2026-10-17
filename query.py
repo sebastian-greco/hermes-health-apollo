@@ -49,8 +49,11 @@ def _date_range(start: str, end: str) -> dict:
             """
             SELECT
                 d.*,
-                COALESCE(food.total_estimated_calories, 0)
-                    AS food_total_estimated_calories,
+                CASE
+                    WHEN food.food_entry_count IS NULL THEN 0
+                    WHEN food.unestimated_entry_count > 0 THEN NULL
+                    ELSE food.total_estimated_calories
+                END AS food_total_estimated_calories,
                 CASE strftime('%w', d.day)
                     WHEN '0' THEN 'Sunday'
                     WHEN '1' THEN 'Monday'
@@ -64,6 +67,13 @@ def _date_range(start: str, end: str) -> dict:
             LEFT JOIN (
                 SELECT
                     day,
+                    COUNT(*) AS food_entry_count,
+                    SUM(CASE
+                        WHEN items_json IS NULL THEN 1
+                        WHEN json_type(items_json, '$.total_estimated_calories')
+                             NOT IN ('integer', 'real') THEN 1
+                        ELSE 0
+                    END) AS unestimated_entry_count,
                     SUM(
                         CAST(
                             json_extract(items_json, '$.total_estimated_calories')
@@ -71,7 +81,6 @@ def _date_range(start: str, end: str) -> dict:
                         )
                     ) AS total_estimated_calories
                 FROM food_logs
-                WHERE items_json IS NOT NULL
                 GROUP BY day
             ) food ON food.day = d.day
             WHERE d.day BETWEEN ? AND ?
@@ -100,8 +109,11 @@ def _stress_days(limit: int) -> dict:
             """
             SELECT
                 d.*,
-                COALESCE(food.total_estimated_calories, 0)
-                    AS food_total_estimated_calories,
+                CASE
+                    WHEN food.food_entry_count IS NULL THEN 0
+                    WHEN food.unestimated_entry_count > 0 THEN NULL
+                    ELSE food.total_estimated_calories
+                END AS food_total_estimated_calories,
                 CASE strftime('%w', d.day)
                     WHEN '0' THEN 'Sunday'
                     WHEN '1' THEN 'Monday'
@@ -115,6 +127,13 @@ def _stress_days(limit: int) -> dict:
             LEFT JOIN (
                 SELECT
                     day,
+                    COUNT(*) AS food_entry_count,
+                    SUM(CASE
+                        WHEN items_json IS NULL THEN 1
+                        WHEN json_type(items_json, '$.total_estimated_calories')
+                             NOT IN ('integer', 'real') THEN 1
+                        ELSE 0
+                    END) AS unestimated_entry_count,
                     SUM(
                         CAST(
                             json_extract(items_json, '$.total_estimated_calories')
@@ -122,7 +141,6 @@ def _stress_days(limit: int) -> dict:
                         )
                     ) AS total_estimated_calories
                 FROM food_logs
-                WHERE items_json IS NOT NULL
                 GROUP BY day
             ) food ON food.day = d.day
             ORDER BY d.stress_high_seconds DESC, d.day DESC
