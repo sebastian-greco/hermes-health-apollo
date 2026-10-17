@@ -7,7 +7,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+
+from packaging.requirements import Requirement
 
 PIN = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.environ.get("HERMES_SOURCE"), "set HERMES_SOURCE to the clean pinned Hermes checkout")
 class PinnedHermesCare(unittest.TestCase):
+    def test_development_extra_accepts_hermes_pytest_pin(self):
+        source = Path(os.environ["HERMES_SOURCE"]).resolve()
+        core = tomllib.loads((source / "pyproject.toml").read_text())
+        plugin = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        core_pytest = next(Requirement(value) for value in core["dependency-groups"]["dev"]
+                           if isinstance(value, str) and Requirement(value).name == "pytest")
+        plugin_pytest = next(Requirement(value) for value in plugin["project"]["optional-dependencies"]["dev"]
+                             if Requirement(value).name == "pytest")
+        pinned = [specifier.version for specifier in core_pytest.specifier
+                  if specifier.operator == "==" and "*" not in specifier.version]
+        self.assertEqual(len(pinned), 1, "Review the Hermes pytest compatibility baseline")
+        self.assertIn(pinned[0], plugin_pytest.specifier,
+                      "Hermes locks plugin extras even when development tools are not installed")
+
     def test_real_sdk_admission_registry_context_and_scoped_apollo_workflow(self):
         source = Path(os.environ["HERMES_SOURCE"]).resolve()
         git_env = {"PATH": os.defpath, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}

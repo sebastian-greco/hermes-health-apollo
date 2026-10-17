@@ -69,6 +69,18 @@ parent session.
 
 ## Compatibility evidence and tests
 
+Plugin release `0.1.0+casita.3` fixes activation on this baseline: Hermes' native
+workspace resolver considers plugin extras alongside core's dependency groups,
+even when development tools are not selected for installation. Apollo's former
+`pytest>=8,<9` constraint conflicted with Hermes' `pytest==9.1.1` pin. The plugin
+now supports pytest 8 and 9; core's dependencies and installer are unchanged.
+
+Admission was reproduced with the real pinned `pm.workspace._generate_pyproject`
+and uv `0.12.3`, seeded with the unchanged Hermes release lock. The old metadata
+fails with that exact pytest conflict; the corrected metadata locks 330 packages,
+preserving every existing core package version. The added compatibility check
+reads the pytest pin from the supplied Hermes source rather than duplicating it.
+
 The focused compatibility tests use the actual pinned Hermes source with
 network access denied and synthetic model responses. They are intended to
 exercise these distinct layers:
@@ -102,8 +114,9 @@ HERMES_SOURCE=/path/to/clean/pinned-hermes \
 `HERMES_COMPAT_EXTRA_PATH` may add an explicitly selected development
 site-packages directory when the pinned SDK and synthetic dependencies are in
 separate environments. The final revision's focused and full suite results must
-be evaluated together: this revision passed 376 tests with zero failures,
-errors or skips on Python 3.14.8, including both real-native execution fixtures.
+be evaluated together: `0.1.0+casita.3` passed 377 tests with zero failures,
+errors or skips on Python 3.14.8 and Hermes' exact pytest 9.1.1 pin, including
+both real-native execution fixtures.
 Wheel/sdist and secret scans passed. The app-side observer passed 66 component
 checks (including its real native-ledger probe) plus six native server checks.
 These are synthetic source checks, not a rebuilt/deployed image or real accounts.
