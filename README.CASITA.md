@@ -25,6 +25,7 @@ no production plugin, patient records or account connections are activated here.
 - [Plan: categorized health logs on Apollo](docs/casita/PLAN.md)
 - [Current delivery status and remaining deployment dependencies](docs/casita/STATUS.md)
 - [Private installation and operator guide](docs/casita/INSTALL.md)
+- [Casita and native specialist interface contract](docs/casita/INTERFACES.md)
 - [Continuation brief](docs/casita/NEXT_SESSION_PROMPT.md)
 - [Developer boundaries](AGENTS.md)
 
@@ -36,16 +37,24 @@ they fit Apollo; do not copy its separate SQLite database wholesale.
 
 ## Product direction
 
-Casita delegates to a dedicated health specialist. The specialist uses Apollo's
-local store and queries, extended with generic categorized logs, ongoing issues,
-illness episodes, visits, doctor summaries, documents and verified reminders.
+Casita delegates health requests to a real Hermes native background child with
+its own restricted health catalog. The child uses Apollo's existing local,
+per-scope store and queries, extended with generic categorized logs, ongoing
+issues, episodes, visits, doctor summaries, documents and verified reminders.
 Common entry fields plus versioned JSON support many diary/measurement types
-without hard-coding a feature for every symptom or condition.
+without hard-coding a feature for every symptom or condition. Durable jobs,
+action receipts and cancellation/restart state live alongside Apollo records in
+the same scope database.
 
 Food logging remains reusable Apollo functionality. Watch imports and a new
 appointment subsystem are deferred. The first useful flow is conversation ->
 saved log linked to a person/episode -> retrievable doctor-ready summary.
 
-Apollo supplies persistent health-data infrastructure. Hermes continues to
-provide agent execution and conversation-memory facilities; this project does
-not assume Apollo already implements a complete clinical memory or family ACL.
+The parent Casita tool returns a job reference promptly; Hermes' async completion
+queue wakes Casita with that reference only. Casita then performs a fresh status
+read before reporting confirmed results. The child receives bounded relevant
+health context and the admitted message, not the general chat transcript or
+house-control tools. Apollo supplies persistent health records and job state;
+Hermes supplies native child execution, provider selection and ordinary Casita
+conversation memory. See the status and interface contract for current
+deployment gates and the exact permission boundaries.
