@@ -20,9 +20,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _CONFIRMATION_SEAL = object()
 
 
@@ -281,6 +281,15 @@ def ensure_reminder_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(scope_id, plan_id, plan_version)
                 REFERENCES care_medication_plan_versions(scope_id, plan_id, version)
         );
+        CREATE TABLE IF NOT EXISTS care_medication_administration_cases (
+            scope_id TEXT NOT NULL,
+            administration_id TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            PRIMARY KEY(scope_id, administration_id, case_id),
+            FOREIGN KEY(scope_id, administration_id)
+                REFERENCES care_medication_administrations(scope_id, administration_id),
+            FOREIGN KEY(case_id) REFERENCES care_cases(case_id)
+        );
         CREATE INDEX IF NOT EXISTS idx_care_reminder_due
             ON care_reminder_occurrences(scope_id, status, scheduled_at);
         CREATE INDEX IF NOT EXISTS idx_care_reminder_plan
@@ -314,6 +323,8 @@ def ensure_reminder_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()[0]
     if version > _SCHEMA_VERSION:
         raise ReminderError("database reminder schema is newer than this code")
+    if version < _SCHEMA_VERSION:
+        conn.execute("UPDATE care_reminder_schema SET version=? WHERE singleton=1", (_SCHEMA_VERSION,))
 
 
 class CareReminderService:
@@ -729,15 +740,22 @@ class CareReminderService:
         source_ref: str,
         report: str,
         idempotency_key: str,
+        case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Record a human-reported administration; no reminder state is consulted."""
         self.session.require("write")
         _require_id(plan_id, "plan id")
-        if not isinstance(version, int) or version < 1:
+        if type(version) is not int or version < 1:
             raise ReminderError("plan version must be positive")
         source_ref = _required_text(source_ref, "source reference", 512)
         report = _required_text(report, "administration report", 1000)
         idempotency_key = _required_text(idempotency_key, "idempotency key", 256)
+        case_ids = [] if case_ids is None else case_ids
+        if not isinstance(case_ids, list) or len(case_ids) > 32:
+            raise ReminderError("case_ids must be a bounded case ID list")
+        for case_id in case_ids:
+            _require_id(case_id, "case id")
+        case_ids = sorted(set(case_ids))
         occurred_iso = _aware_iso(occurred_at)
         reported_iso = _aware_iso(self.clock())
         admin_id = str(uuid4())
@@ -748,10 +766,17 @@ class CareReminderService:
             ).fetchone()
             if exists is None:
                 raise ReminderError("medication plan version not found in this scope")
-            fingerprint = _request_fingerprint({
+            for case_id in case_ids:
+                if not conn.execute("SELECT 1 FROM care_cases WHERE case_id=?", (case_id,)).fetchone():
+                    raise ReminderError("administration case not found in this scope")
+            fingerprint_data = {
                 "plan_id": plan_id, "version": version, "occurred_at": occurred_iso,
                 "source_ref": source_ref, "report": report, "reported_by": self.actor_id,
-            })
+            }
+            # Preserve replay identities written before additive case links.
+            if case_ids:
+                fingerprint_data["case_ids"] = case_ids
+            fingerprint = _request_fingerprint(fingerprint_data)
             conn.execute(
                 """INSERT OR IGNORE INTO care_medication_administrations
                    (scope_id, administration_id, plan_id, plan_version, occurred_at, reported_at,
@@ -767,9 +792,12 @@ class CareReminderService:
             ).fetchone()
             if row[7] != fingerprint:
                 raise ReminderConflict("idempotency key was already used for a different report")
+            for case_id in case_ids:
+                conn.execute("INSERT OR IGNORE INTO care_medication_administration_cases VALUES (?, ?, ?)",
+                             (self.scope_id, row["administration_id"], case_id))
         result = dict(row)
         result.pop("request_fingerprint", None)
-        return {**result, "status": "reported"}
+        return {**result, "case_ids": case_ids, "status": "reported"}
 
     def dispatch_due(
         self,

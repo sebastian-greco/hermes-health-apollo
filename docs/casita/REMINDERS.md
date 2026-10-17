@@ -105,3 +105,11 @@ transaction. This implementation has synthetic SQLite tests only; Hermes tool
 registration, trusted WhatsApp confirmation handling, a concrete egress adapter,
 host lifecycle/wake wiring, migration against a real Apollo database, and user
 acceptance remain separate integration work.
+
+The additive reminder schema v2 adds optional `case_ids` to
+`record_administration`: up to 32 existing issue/episode/visit IDs in the same
+scoped Apollo database. Links commit atomically with the human report and enter
+its replay fingerprint. Empty links preserve pre-v2 replay identities. The
+connected doctor report assembler shows actual reports with their original
+plan-version evidence and keeps reminder acknowledgements separate; see
+[connected reports](REPORTS.md). No case link changes reminder or treatment state.
