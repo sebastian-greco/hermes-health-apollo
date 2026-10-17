@@ -2,7 +2,9 @@
 
 Decision: 2026-10-17. This supersedes the previous standalone-core assignment.
 The required base is the existing Apollo repository and its data infrastructure.
-No further implementation session is launched by this planning change.
+The later explicit user authorization starts implementation on
+`codex/end-to-end` with delegated phases, reviews, tests and fixes. This does
+not authorize changing repository visibility or activating production services.
 
 ## 1. Preserve and establish the base
 
@@ -154,10 +156,11 @@ to deliver the journal, doctor summary, document filing or useful reminders.
 
 ## Review and implementation boundaries
 
-At this preparation stage only docs/instructions are changed. Keep the existing
-upstream runtime and license intact. The next implementation session should
-begin with the reuse map and first workflow above, then run meaningful upstream
-and new regression tests using synthetic data and isolated Hermes profiles.
+The approved source work is implemented in phases on `codex/end-to-end`.
+Keep the upstream license and intentional compatibility intact. The reuse map,
+implementation interfaces and test evidence are in adjacent documents. Review
+`STATUS.md` before continuing: real account consent, transport capabilities and
+live activation must not be inferred from passing isolated tests.
 Do not install this checkout into live Hermes, connect real accounts, read
 patient files or alter HA configuration while developing source.
 

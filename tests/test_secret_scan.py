@@ -109,3 +109,17 @@ def test_secret_scan_blocks_private_workspace_paths(tmp_path):
     findings = secret_scan.scan(private_files)
 
     assert [finding.kind for finding in findings] == ["blocked_path"] * len(private_files)
+
+
+def test_reviewed_care_source_docs_still_scan_contents(tmp_path, monkeypatch):
+    scanner = load_secret_scan()
+    monkeypatch.chdir(tmp_path)
+    document = Path("docs/casita/INSTALL.md")
+    document.parent.mkdir(parents=True)
+    document.write_text("Synthetic setup guide\n")
+    assert scanner.scan([document]) == []
+    document.write_text("api_key = '" + "sk-" + "A" * 30 + "'\n")
+    assert "openai_api_key" in {f.kind for f in scanner.scan([document])}
+    other = Path("docs/casita/patient-private.md")
+    other.write_text("private runtime data belongs elsewhere\n")
+    assert "blocked_path" in {f.kind for f in scanner.scan([other])}

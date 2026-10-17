@@ -125,6 +125,7 @@ def refresh_canonical_facts(*, start: str, end: str) -> dict:
         conn.execute("DELETE FROM observations WHERE day BETWEEN ? AND ?", (start, end))
         conn.execute("DELETE FROM events WHERE day BETWEEN ? AND ?", (start, end))
         _project_food_logs(conn, start, end)
+        _project_care_entries(conn, start, end)
         _project_oura_workouts(conn, start, end)
         _project_sleep_sessions(conn, start, end)
         _project_daily_rollups(conn, start, end)
@@ -165,6 +166,72 @@ def _project_food_logs(conn: sqlite3.Connection, start: str, end: str) -> None:
             entity_id = f"food:{_slug(name)}"
             _upsert_entity(conn, entity_id, "food", _slug(name), name, item)
             _upsert_event_entity(conn, event_id, entity_id, "food", item)
+
+
+def _project_care_entries(conn: sqlite3.Connection, start: str, end: str) -> None:
+    rows = conn.execute(
+        "SELECT payload_json FROM care_entries WHERE "
+        "substr(COALESCE(occurrence_start, recorded_at), 1, 10) BETWEEN ? AND ?",
+        (start, end),
+    ).fetchall()
+    for row in rows:
+        project_care_entry(conn, json.loads(row[0]))
+
+
+def project_care_entry(conn: sqlite3.Connection, entry: dict) -> None:
+    """Project the current immutable-revision head using Apollo's canonical model.
+
+    Unknown occurrence uses recorded time only for the required canonical index;
+    explicit attributes and quality prevent it becoming a known occurrence.
+    """
+    from . import sync_control
+
+    source_id = sync_control.ensure_source(
+        conn, source_slug="care_journal", provider="manual", connection_name="Care journal",
+        status="manual", sync_mode="manual",
+    )
+    raw_id = sync_control.persist_raw_record(
+        conn, source_id=source_id, sync_batch_id=None, provider="care_journal",
+        object_type="care_entry_revision", external_id=f"{entry['entry_id']}:{entry['revision']}",
+        payload=entry, source_updated_at=entry["revised_at"], privacy_tier="sensitive",
+    )
+    sync_control.attach_lineage(
+        conn, canonical_table="care_entry_revisions",
+        canonical_id=f"{entry['entry_id']}:{entry['revision']}", raw_record_id=raw_id,
+    )
+    event_id = f"care:{entry['entry_id']}"
+    conn.execute("DELETE FROM observations WHERE source_event_id=?", (event_id,))
+    conn.execute("DELETE FROM event_entities WHERE event_id=?", (event_id,))
+    timestamp = entry["occurrence_start"] or entry["recorded_at"]
+    attributes = {**entry, "occurrence_unknown": entry["occurrence_start"] is None,
+                  "canonical_time_basis": "occurrence" if entry["occurrence_start"] else "recorded"}
+    _upsert_event(conn, event_id, "care_log", "care_journal", "care_entries",
+                  entry["entry_id"], timestamp, entry["occurrence_end"], timestamp[:10],
+                  entry["narrative"] or entry["category_id"], attributes)
+    definition_row = conn.execute(
+        "SELECT definition_json FROM care_categories WHERE category_id=? AND version=?",
+        (entry["category_id"], entry["category_version"]),
+    ).fetchone()
+    definition = json.loads(definition_row[0])
+    for field, config in definition["observations"].items():
+        value = entry["data"].get(field)
+        if type(value) not in {int, float}:
+            continue
+        _upsert_observation(conn, f"{event_id}:{field}", "care_journal",
+                            f"care.{entry['category_id']}.{field}", field,
+                            entry["data"][config["unit_field"]], value, None,
+                            timestamp, entry["occurrence_end"], timestamp[:10],
+                            event_id, None, "care_entries", entry["entry_id"],
+                            "reported" if entry["uncertainty"] == "exact" else "uncertain",
+                            {"revision": entry["revision"], "source_ref": entry["source_ref"],
+                             "uncertainty": entry["uncertainty"],
+                             "canonical_time_basis": attributes["canonical_time_basis"]})
+    for case_id in entry["links"]:
+        row = conn.execute("SELECT payload_json FROM care_cases WHERE case_id=?", (case_id,)).fetchone()
+        case = json.loads(row[0])
+        entity_id = f"care-case:{case_id}"
+        _upsert_entity(conn, entity_id, f"care_{case['kind']}", case_id, case["title"], case)
+        _upsert_event_entity(conn, event_id, entity_id, case["kind"], {})
 
 
 def _project_oura_workouts(conn: sqlite3.Connection, start: str, end: str) -> None:

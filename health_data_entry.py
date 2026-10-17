@@ -95,6 +95,9 @@ def _register_from_installed_modules(ctx, base_dir: Path) -> None:
         package = types.ModuleType(package_name)
         package.__path__ = [str(base_dir)]
         sys.modules[package_name] = package
+    if callable(getattr(ctx, "get_config", None)) and ctx.get_config("care.enabled", False) is True:
+        care_plugin = importlib.import_module(f"{package_name}.care_plugin")
+        return care_plugin.register(ctx)
     try:
         analysis_tools = importlib.import_module(f"{package_name}.analysis_tools")
         commands = importlib.import_module(f"{package_name}.commands")

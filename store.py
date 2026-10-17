@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
 import logging
 import os
 import sqlite3
@@ -8,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+
+_DATABASE_BINDING: ContextVar[Path | None] = ContextVar("apollo_database", default=None)
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +29,22 @@ def hermes_home() -> Path:
 
 
 def database_path() -> Path:
-    return hermes_home() / "health.db"
+    return _DATABASE_BINDING.get() or hermes_home() / "health.db"
 
 
-def connect() -> sqlite3.Connection:
-    initialize()
-    conn = sqlite3.connect(database_path())
+@contextlib.contextmanager
+def bind_database(path: Path | str):
+    """Bind legacy Apollo operations to one trusted scope without global env changes."""
+    token = _DATABASE_BINDING.set(Path(path).resolve())
+    try:
+        yield database_path()
+    finally:
+        _DATABASE_BINDING.reset(token)
+
+
+def connect(path: Path | str | None = None) -> sqlite3.Connection:
+    db_path = initialize(Path(path) if path is not None else None)
+    conn = sqlite3.connect(db_path, timeout=30)
     _configure(conn)
     conn.row_factory = sqlite3.Row
     return conn
@@ -93,7 +106,7 @@ def _reconcile_pr10_schema(conn: sqlite3.Connection) -> None:
     # drop logic does not run on every initialize() forever.
     if "schema_version" in tables:
         row = conn.execute("SELECT version FROM schema_version").fetchone()
-        if row is not None and row[0] >= SCHEMA_VERSION:
+        if row is not None and row[0] >= 8:
             return
     if "daily_health_metrics" in tables:
         columns = {
@@ -115,6 +128,11 @@ def _reconcile_pr10_schema(conn: sqlite3.Connection) -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
+    existing = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone()
+    if existing:
+        row = conn.execute("SELECT version FROM schema_version").fetchone()
+        if row is not None and row[0] > SCHEMA_VERSION:
+            raise RuntimeError("Database schema is newer than this Apollo version")
     _reconcile_pr10_schema(conn)
     conn.executescript(
         """
@@ -645,6 +663,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     semantic_layer.ensure_canonical_schema(conn)
     _ensure_onboarding_schema(conn)
+    from .care_store import ensure_care_schema
+
+    ensure_care_schema(conn)
     from . import sync_control
 
     sync_control.backfill_legacy_sources(conn)

@@ -1,3 +1,9 @@
+# Casita private derivative
+
+This branch adds Casita's scoped health specialist on the existing Apollo base.
+Read [README.CASITA.md](README.CASITA.md) for current implementation, installation
+and deployment limits. The upstream Apollo documentation follows below.
+
 # Hermes Health Apollo
 
 Local-first health intelligence for Hermes. Apollo connects your wearable data,

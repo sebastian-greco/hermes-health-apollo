@@ -11,16 +11,21 @@ The original scheduled GitHub workflow is preserved verbatim under
 `.github/upstream-workflows/eval.yml` and in upstream history. It is inactive in
 this private copy: the current GitHub credential cannot create active workflow
 files, and account permissions have not been expanded for this preparation.
-Runtime source, tests and local check scripts are unchanged.
+The original workflow remains inactive; local validation is recorded below.
 
 ## Current state
 
-Apollo is now the required implementation foundation. This preparation adds
-instructions and the revised plan only; it does not modify upstream runtime code,
-install plugins or activate patient records, account connections or reminders.
+The user explicitly authorized the phased implementation on 2026-10-17. Branch
+`codex/end-to-end` now extends Apollo's existing storage, migrations, provenance,
+projections and food path. It adds scoped generic logs, connected episodes,
+doctor reports, a separate specialist context, documents/Drive and durable
+verified reminders. Source implementation and deployment readiness are distinct;
+no production plugin, patient records or account connections are activated here.
 
 - [Plan: categorized health logs on Apollo](docs/casita/PLAN.md)
-- [Prepared implementation-session prompt](docs/casita/NEXT_SESSION_PROMPT.md)
+- [Current delivery status and remaining deployment dependencies](docs/casita/STATUS.md)
+- [Private installation and operator guide](docs/casita/INSTALL.md)
+- [Continuation brief](docs/casita/NEXT_SESSION_PROMPT.md)
 - [Developer boundaries](AGENTS.md)
 
 The earlier standalone implementation remains intact in private repository

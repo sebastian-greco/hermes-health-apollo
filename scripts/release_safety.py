@@ -149,7 +149,8 @@ def check_snapshot_export() -> None:
 
 
 def check_tracked_paths() -> None:
-    check_no_blocked_paths(git_files(), label="tracked files")
+    from secret_scan import REVIEWED_SOURCE_DOCS
+    check_no_blocked_paths([p for p in git_files() if p not in REVIEWED_SOURCE_DOCS], label="tracked files")
 
 
 def main(argv: list[str] | None = None) -> int:
